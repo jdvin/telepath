@@ -36,7 +36,30 @@ class MultiHeadAttention(torch.nn.Module):
             b = Batch size.
             t = Sequence length.
             d = Model depth.
+
+        Returns:
+            The output of the Multi-head Attention computation and the attention weights.
         """
+
+        # Some validation.
+        assert (
+            q.shape == k.shape == v.shape
+        ), "Query, Key, and Value tensors must be of the same shape."
+
+        assert (
+            q.shape[-1] == k.shape[-1] == v.shape[-1] == self.d_model
+        ), "The last dimension of the Query, Key, and Value tensors must be the same size as the model depth declared during initialization."
+
+        if len(q.shape) == 2:
+            q = torch.unsqueeze(q, 0)
+            k = torch.unsqueeze(k, 0)
+            v = torch.unsqueeze(v, 0)
+        elif len(q.shape) == 3:
+            pass
+        else:
+            raise ValueError(
+                "The Query, Key, and Value tensors must be either of shape (b x t x d) or (t x d)."
+            )
 
         # Get the batch size from the input.
         b = q.shape[0]
