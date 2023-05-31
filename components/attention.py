@@ -50,12 +50,15 @@ class MultiHeadAttention(torch.nn.Module):
             q.shape[-1] == k.shape[-1] == v.shape[-1] == self.d_model
         ), "The last dimension of the Query, Key, and Value tensors must be the same size as the model depth declared during initialization."
 
+        # If the inputs are not batched, batch them.
         if len(q.shape) == 2:
             q = torch.unsqueeze(q, 0)
             k = torch.unsqueeze(k, 0)
             v = torch.unsqueeze(v, 0)
+        # Otherwise, leave it.
         elif len(q.shape) == 3:
             pass
+        # If they are not either 2 or 3 dimensional, then they are of the wrong shape.
         else:
             raise ValueError(
                 "The Query, Key, and Value tensors must be either of shape (b x t x d) or (t x d)."
