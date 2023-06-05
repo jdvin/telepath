@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 
 import mne
 import polars as pl
@@ -23,13 +24,16 @@ def extract_from_eeg_file(
         preload=True,
     )
     events_from_annotations, events_dict = mne.events_from_annotations(raw)
+
+    # T=0 w.r.t. each epoch is one sample before the object is displayed.
     epochs = mne.Epochs(
         raw,
         events_from_annotations,
         events_dict,
-        tmin=0.0,
-        tmax=(0.05).jso,
+        tmin=0.001,
+        tmax=0.05,
         baseline=None,
+        preload=True,
     )
     object_events_df = pl.read_csv(
         root_path + data_path_template.format(participant=participant) + "events.tsv",
@@ -37,22 +41,27 @@ def extract_from_eeg_file(
     )
     object_on_epoch = []
     object_off_epoch = []
-    i = -1
+    i = 0
     for object_onset in tqdm.tqdm(object_events_df["onset"]):
         while True:
-            i += 1
             # If the object onset is within 1 sample of the start of the epoch.
             if abs(object_onset - epochs[i].events[0, 0]) <= 1:
                 # Add this and subsequent epoch to the column arrays.
-                object_on_epoch.append(epochs[i].to_data_frame().to_json())
-                object_off_epoch.append(epochs[i + 1].to_data_frame().to_json())
-                import pdb
-
-                pdb.set_trace()
+                object_on_epoch.append(epochs[i].to_data_frame().to_dict())
+                object_off_epoch.append(epochs[i + 1].to_data_frame().to_dict())
+                # We know the next epoch is not for the next object, so we skip it.
+                i += 2
                 break
+            i += 1
+    object_events_df = object_events_df.with_columns(
+        pl.Series(name="object_on_epoch", values=object_on_epoch),
+        pl.Series(name="object_off_epoch", values=object_off_epoch),
+    )
 
-        # Add stim_on and stim_off epochst to `object_events.`
-    # Save `object_events.`
+    object_events_df.write_json(
+        file=os.path.join(root_path, "combined", f"{participant}.json")
+    )
+
     return object_events_df
 
 
