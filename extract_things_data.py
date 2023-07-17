@@ -35,7 +35,7 @@ def extract_from_eeg_file(
     # Read the raw data through MNE.
     raw = mne.io.read_raw_brainvision(
         ROOT_PATH + data_path_template.format(participant=participant) + "eeg.vhdr",
-        preload=True,
+        preload=False,
     )
     # Extract
     events_from_annotations, events_dict = mne.events_from_annotations(raw)
@@ -48,12 +48,14 @@ def extract_from_eeg_file(
         tmin=0.001,
         tmax=0.05,
         baseline=None,
-        preload=True,
+        preload=False,
     )
 
     object_events_df = pl.read_csv(
         ROOT_PATH + data_path_template.format(participant=participant) + "events.tsv",
         separator="\t",
+        infer_schema_length=10000,
+        dtypes={"rt": "f64"},
     )
     object_on_epoch = []
     object_off_epoch = []
@@ -101,11 +103,14 @@ def load_participant(args: tuple[str, dict]):
 if __name__ == "__main__":
     participants = [f"sub-{'0' if i < 10 else ''}{i}" for i in range(1, 51)]
 
+    if not os.path.exists(os.path.join(ROOT_PATH, "combined")):
+        os.mkdir(os.path.join(ROOT_PATH, "combined"))
+
     participant_data: List[Dict[str, Any]] = pl.read_csv(
         ROOT_PATH + "participants.tsv", separator="\t"
     ).to_dicts()
     args = zip(participants, participant_data)
-    with multiprocessing.Pool(2) as p:
+    with multiprocessing.Pool(3) as p:
         success = p.map(load_participant, args)
 
     print(
