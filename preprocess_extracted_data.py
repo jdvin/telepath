@@ -5,10 +5,12 @@ import polars as pl
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument("--root_path", type=str, default="/Volumes/T7/datasets/things-eeg/")
+parser.add_argument(
+    "--root_path", type=str, default="/Volumes/T7/datasets/things-eeg/combined/"
+)
 
 
-SUBJECT_DATA = "combined/sub-16.json"
+SUBJECT_DATA = "sub-16.json"
 
 ELECTRODES = [
     "Fp1",
@@ -83,17 +85,24 @@ if __name__ == "__main__":
 
     df = df.filter((pl.col("blocksequencenumber") >= 0) & (pl.col("istarget") == 0))
 
-    cols = df.columns
-
     object_on_epoch = df.select(["eventnumber", "object_on_epoch"]).unnest(
         "object_on_epoch"
     )
-    object_off_epoch = (
-        df.select(["eventnumber", "object_off_epoch"])
-        .unnest("object_off_epoch")
-        .unnest(ELECTRODES)
+    object_off_epoch = df.select(["eventnumber", "object_off_epoch"]).unnest(
+        "object_off_epoch"
     )
 
-    obj = df.select("object")
+    combined = df.select(["eventnumber", "object"])
 
-    df = pl.concat()
+    for electrode in ELECTRODES:
+        electrode_combined_epoch = df.select(
+            pl.concat_list(object_on_epoch[electrode], object_off_epoch[electrode])
+        )
+        combined = combined.with_columns(electrode_combined_epoch)
+
+    combined = combined.with_columns(
+        pl.select(pl.concat_list(combined.select(ELECTRODES)))
+    ).rename({"Fp1": "eeg"})
+    import pdb
+
+    pdb.set_trace()
