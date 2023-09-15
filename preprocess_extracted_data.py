@@ -1,5 +1,6 @@
 import argparse
 import os
+import json
 
 import polars as pl
 
@@ -100,9 +101,17 @@ if __name__ == "__main__":
         )
         combined = combined.with_columns(electrode_combined_epoch)
 
+    # Result of a column with data: [Fp1_0, Fp1_1, Fp1_2, ..., Fp1_99, Fz_0, Fz_1, ...]
     combined = combined.with_columns(
         pl.select(pl.concat_list(combined.select(ELECTRODES)))
     ).rename({"Fp1": "eeg"})
-    import pdb
 
-    pdb.set_trace()
+    preprocessed_path = os.path.join(
+        args.root_path, SUBJECT_DATA.split(".")[0] + "_preprocessed" + ".jsonl"
+    )
+
+    # JSONL export.
+    with open(preprocessed_path, "w") as f:
+        for row in combined.to_dicts():
+            row.update({"electrode_order": ELECTRODES, "samples_per_epoch": 100})
+            f.write(json.dumps(row) + "\n")
