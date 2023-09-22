@@ -5,11 +5,11 @@ import datasets
 import transformers
 import torch
 
-from typing import Callable
+from typing import Callable, Any
 
 
 class ValidationType(enum.Enum):
-    RANDOM = ("random",)
+    RANDOM = "random"
     SUBJECT = "subject"
     OBJECT = "object"
 
@@ -19,10 +19,9 @@ def get_transform(
     max_length: int,
     num_channels: int,
     num_samples: int,
-) -> Callable[[dict], torch.Tensor]:
-    def transform(batch):
-        raise NotImplementedError("WRITE A TEST FOR THIS!")
-        batch["eeg"] = torch.tensor(batch["eeg"]).reshape(-1, num_samples, num_channels)
+) -> Callable[[dict[str, Any]], dict[str, torch.Tensor]]:
+    def transform(batch) -> dict[str, torch.Tensor]:
+        batch["eeg"] = torch.tensor(batch["eeg"]).reshape(-1, num_channels, num_samples)
         batch["input_ids"] = tokenizer(
             batch["object"],
             padding="max_length",
