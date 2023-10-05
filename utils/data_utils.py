@@ -1,3 +1,4 @@
+import argparse
 import enum
 import random
 
@@ -12,6 +13,18 @@ class ValidationType(enum.Enum):
     RANDOM = "random"
     SUBJECT = "subject"
     OBJECT = "object"
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--datafiles", type=str, nargs="+", required=True)
+parser.add_argument("--validation_type", type=ValidationType, required=True)
+parser.add_argument("--validation_objects", type=str, nargs="+")
+parser.add_argument("--pre_transform", action="store_true")
+parser.add_argument("--tokenizer", type=str)
+parser.add_argument("--max_length", type=int)
+parser.add_argument("--num_channels", type=int)
+parser.add_argument("--num_samples", type=int)
+parser.add_argument("--output_path", type=str)
 
 
 def get_transform(
@@ -87,3 +100,40 @@ def create_dataset(
             remove_columns=["object"],
         )
     return dataset_splits
+
+
+def get_dataset(
+    path: str,
+    add_transform: bool = True,
+    tokenizer: transformers.PreTrainedTokenizerFast | None = None,
+    max_length: int | None = None,
+    num_channels: int | None = None,
+    num_samples: int | None = None,
+) -> datasets.DatasetDict:
+    dataset = datasets.load_from_disk(path)
+    assert isinstance(dataset, datasets.DatasetDict)
+
+    if add_transform:
+        assert tokenizer is not None
+        assert max_length is not None
+        assert num_channels is not None
+        assert num_samples is not None
+        transform_fn = get_transform(tokenizer, max_length, num_channels, num_samples)
+        dataset.set_transform(transform_fn)
+
+    return dataset
+
+
+if __name__ == "__main__":
+    args = parser.parse_args()
+    dataset = create_dataset(
+        datafiles=args.datafiles,
+        validation_type=args.validation_type,
+        validation_objects=args.validation_objects,
+        pre_transform=args.pre_transform,
+        tokenizer=args.tokenizer,
+        max_length=args.max_length,
+        num_channels=args.num_channels,
+        num_samples=args.num_samples,
+    )
+    dataset.save_to_disk(args.output_path)

@@ -55,6 +55,10 @@ class TelepathLightningWrapper(pl.LightningModule):
         self.model = Telepath(self.config)
         self.optimizer_config = OptimizerConfig.from_yaml(optimizer_config_path)
 
+        if self.config.freeze_gpt:
+            for param in self.model.decoder.parameters():
+                param.requires_grad = False
+
     def training_step(self, batch, batch_idx):
         eeg, tokens = batch
         pred_tokens = self.model(eeg, tokens)
@@ -69,14 +73,14 @@ class TelepathLightningWrapper(pl.LightningModule):
         self.log("eval_loss", loss)
         return loss
 
-
     def configure_optimizers(self):
         param_groups = self.model.encoder.optim_groups(
-                self.optimzer_config.optim_params.pop("weight_decay")
+            self.optimzer_config.optim_params.pop("weight_decay")
         )
         if not self.config.freeze_gpt:
-            param_groups.extend(self.model.decoder.optim_groups(
-                self.optimizer_config.optim_params.pop("weight_decay")
+            param_groups.extend(
+                self.model.decoder.optim_groups(
+                    self.optimizer_config.optim_params.pop("weight_decay")
                 )
             )
 
