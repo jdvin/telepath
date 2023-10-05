@@ -3,6 +3,7 @@ import enum
 import random
 
 import datasets
+import pandas as pd
 import transformers
 import torch
 
@@ -18,7 +19,6 @@ class ValidationType(enum.Enum):
 parser = argparse.ArgumentParser()
 parser.add_argument("--datafiles", type=str, nargs="+", required=True)
 parser.add_argument("--validation_type", type=ValidationType, required=True)
-parser.add_argument("--validation_objects", type=str, nargs="+")
 parser.add_argument("--pre_transform", action="store_true")
 parser.add_argument("--tokenizer", type=str)
 parser.add_argument("--max_length", type=int)
@@ -28,15 +28,22 @@ parser.add_argument("--output_path", type=str)
 
 
 def get_transform(
-    tokenizer: transformers.PreTrainedTokenizerFast,
+    tokenizer: transformers.PreTrainedTokenizer,
     max_length: int,
     num_channels: int,
     num_samples: int,
+    things_concepts_path: str = "data/things_concepts.csv",
 ) -> Callable[[dict[str, Any]], dict[str, torch.Tensor]]:
+    # Load the map from object ID to word.
+    things_concepts = pd.read_csv(things_concepts_path)
+    object_id_to_word = dict(zip(things_concepts["uniqueID"], things_concepts["Word"]))
+
+    # Define transformation function with parameters.
     def transform(batch) -> dict[str, torch.Tensor]:
         batch["eeg"] = torch.tensor(batch["eeg"]).reshape(-1, num_channels, num_samples)
+        objects = [object_id_to_word[object_id] for object_id in batch["object"]]
         batch["input_ids"] = tokenizer(
-            batch["object"],
+            objects,
             padding="max_length",
             truncation=True,
             max_length=max_length,
@@ -51,13 +58,14 @@ def get_transform(
 def create_dataset(
     datafiles: list[str],
     validation_type: ValidationType,
-    validation_objects: list[str] | None = None,
     pre_transform: bool = False,
-    tokenizer: transformers.PreTrainedTokenizerFast | None = None,
+    tokenizer: transformers.PreTrainedTokenizer | None = None,
     max_length: int | None = None,
     num_channels: int | None = None,
     num_samples: int | None = None,
+    things_concepts_path: str = "data/things_concepts.csv",
 ) -> datasets.DatasetDict:
+    # If we are using subject-held-out validation, randomly choose one subject data file to hold.
     if validation_type == ValidationType.SUBJECT:
         assert (
             len(datafiles) > 1
@@ -68,6 +76,7 @@ def create_dataset(
             "test": [held_out_subject],
         }
     else:
+        # Otherwise, all data is put in the training set for now.
         datafile_map = {"train": datafiles}
 
     dataset = datasets.load_dataset("json", data_files=datafile_map)
@@ -77,6 +86,10 @@ def create_dataset(
             test_size=0.1, seed=42
         )
     elif validation_type == ValidationType.OBJECT:
+        things_concepts = pd.read_csv(things_concepts_path)
+        validation_objects = things_concepts["uniqueID"].sample(
+            frac=0.1, random_state=42
+        )
         train_dataset = dataset["train"].filter(
             lambda row: row["object"] not in validation_objects
         )
@@ -105,7 +118,7 @@ def create_dataset(
 def get_dataset(
     path: str,
     add_transform: bool = True,
-    tokenizer: transformers.PreTrainedTokenizerFast | None = None,
+    tokenizer: transformers.PreTrainedTokenizer | None = None,
     max_length: int | None = None,
     num_channels: int | None = None,
     num_samples: int | None = None,
@@ -129,7 +142,6 @@ if __name__ == "__main__":
     dataset = create_dataset(
         datafiles=args.datafiles,
         validation_type=args.validation_type,
-        validation_objects=args.validation_objects,
         pre_transform=args.pre_transform,
         tokenizer=args.tokenizer,
         max_length=args.max_length,

@@ -28,6 +28,7 @@ parser.add_argument("--num_samples", type=int)
 
 
 def main(
+    run_name: str,
     dataset_path: str,
     add_transform: bool,
     tokenizer_path: str,
@@ -42,10 +43,10 @@ def main(
         assert max_length is not None
         assert num_channels is not None
         assert num_samples is not None
-        tokenizer: PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(
-            tokenizer_path
-        )
+        tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
         assert isinstance(tokenizer, PreTrainedTokenizer)
+    else:
+        tokenizer = None
 
     ds = get_dataset(
         path=dataset_path,
@@ -65,8 +66,8 @@ def main(
     logger = WandbLogger(project="telepath")
 
     # Create data loaders.
-    train_dataloader = DataLoader(ds["train"], batch_size=32)
-    val_dataloader = DataLoader(ds["test"], batch_size=32)
+    train_dataloader = DataLoader(ds["train"], batch_size=32)  # type: ignore
+    val_dataloader = DataLoader(ds["test"], batch_size=32)  # type: ignore
 
     # Create trainer.
     trainer = pl.Trainer(accelerator="mps", val_check_interval=0.1, logger=logger)
@@ -81,6 +82,7 @@ def main(
 if __name__ == "__main__":
     args = parser.parse_args()
     main(
+        run_name=args.run_name,
         dataset_path=args.dataset_path,
         add_transform=args.add_transform,
         tokenizer_path=args.tokenizer_path,
