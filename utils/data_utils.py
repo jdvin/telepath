@@ -29,6 +29,8 @@ parser.add_argument("--output_path", type=str)
 
 def get_transform(
     tokenizer: transformers.PreTrainedTokenizer,
+    start_token_id: int,
+    pad_token_id: int,
     max_length: int,
     num_channels: int,
     num_samples: int,
@@ -37,18 +39,26 @@ def get_transform(
     # Load the map from object ID to word.
     things_concepts = pd.read_csv(things_concepts_path)
     object_id_to_word = dict(zip(things_concepts["uniqueID"], things_concepts["Word"]))
+    tokenizer.pad_token_id = pad_token_id
 
     # Define transformation function with parameters.
     def transform(batch) -> dict[str, torch.Tensor]:
         batch["eeg"] = torch.tensor(batch["eeg"]).reshape(-1, num_channels, num_samples)
         objects = [object_id_to_word[object_id] for object_id in batch["object"]]
-        batch["input_ids"] = tokenizer(
+        batch["input_ids"] = tokenizer.encode(
             objects,
             padding="max_length",
             truncation=True,
-            max_length=max_length,
+            max_length=max_length - 1,
             return_tensors="pt",
-        )["input_ids"]
+        )
+        batch["input_ids"] = torch.cat(
+            (
+                torch.full((batch["input_ids"].size(0), 1), start_token_id),
+                batch["input_ids"],
+            ),
+            dim=1,
+        )
 
         return batch
 
@@ -87,8 +97,8 @@ def create_dataset(
         )
     elif validation_type == ValidationType.OBJECT:
         things_concepts = pd.read_csv(things_concepts_path)
-        validation_objects = things_concepts["uniqueID"].sample(
-            frac=0.1, random_state=42
+        validation_objects = list(
+            things_concepts["uniqueID"].sample(frac=0.1, random_state=42)
         )
         train_dataset = dataset["train"].filter(
             lambda row: row["object"] not in validation_objects
@@ -112,6 +122,7 @@ def create_dataset(
             batch_size=None,
             remove_columns=["object"],
         )
+    print(dataset_splits)
     return dataset_splits
 
 
@@ -119,6 +130,8 @@ def get_dataset(
     path: str,
     add_transform: bool = True,
     tokenizer: transformers.PreTrainedTokenizer | None = None,
+    start_token_id: int | None = None,
+    pad_token_id: int | None = None,
     max_length: int | None = None,
     num_channels: int | None = None,
     num_samples: int | None = None,
@@ -131,7 +144,16 @@ def get_dataset(
         assert max_length is not None
         assert num_channels is not None
         assert num_samples is not None
-        transform_fn = get_transform(tokenizer, max_length, num_channels, num_samples)
+        assert start_token_id is not None
+        assert pad_token_id is not None
+        transform_fn = get_transform(
+            tokenizer=tokenizer,
+            max_length=max_length,
+            start_token_id=start_token_id,
+            pad_token_id=pad_token_id,
+            num_channels=num_channels,
+            num_samples=num_samples,
+        )
         dataset.set_transform(transform_fn)
 
     return dataset

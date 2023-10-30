@@ -5,8 +5,8 @@ import torch
 from torch import nn
 import yaml
 
-from gpt import GPT, PreTrainedGPT
-from components import attention, norm
+from .gpt import GPT
+from .components import attention, norm
 
 
 @dataclass
@@ -24,7 +24,7 @@ class TelepathConfig:
     encoder_bias: bool
     encoder_dropout: float
 
-    pretrained_gpt: PreTrainedGPT | None = None
+    pretrained_gpt: GPT | None = None
     freeze_gpt: bool = True
     gpt_start_token: int = 50257
     gpt_stop_token: int = 50256

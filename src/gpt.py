@@ -1,20 +1,13 @@
 """All credit for this GPT implementation goes to Karpathy; this is a direct copy of nanoGPT."""
-
-import enum
 import math
+import re
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from components.norm import LayerNorm
-from components.attention import MultiheadAttention
-
-
-class PreTrainedGPT(enum.Enum):
-    GPT2 = "gpt2"
-    GPT2_MEDIUM = "gpt2-medium"
-    GPT2_LARGE = "gpt2-large"
-    GPT2_XL = "gpt2-xl"
+from .components.norm import LayerNorm
+from .components.attention import MultiheadAttention
 
 
 class Block(nn.Module):
@@ -55,6 +48,7 @@ class GPT(nn.Module):
         block_size: int,
         dropout: float,
     ):
+        super().__init__()
         self.transformer = nn.ModuleDict(
             dict(
                 wte=nn.Embedding(vocab_size, d_model),
@@ -141,7 +135,7 @@ class GPT(nn.Module):
         # but want to use a smaller block size for some smaller, simpler model
         assert block_size <= self.block_size
         self.block_size = block_size
-        self.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])  # type: ignore
+        self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])  # type: ignore
         for block in self.transformer.blocks:  # type: ignore
             if hasattr(block.attn, "bias"):
                 block.attn.bias = block.attn.bias[:, :, :block_size, :block_size]
@@ -149,32 +143,80 @@ class GPT(nn.Module):
     @classmethod
     def from_pretrained(cls, model_type, override_args=None):
         assert model_type in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}
+        PARAM_MAP = (
+            (r"transformer.wte.weight", r"transformer.wte.weight"),
+            (r"transformer.wpe.weight", r"transformer.wpe.weight"),
+            (
+                r"transformer.h.[0-9]+.ln_1.weight",
+                r"transformer.blocks.[0-9]+.ln_1.graph.2.weights",
+            ),
+            (
+                r"transformer.h.[0-9]+.ln_1.bias",
+                r"transformer.blocks.[0-9]+.ln_1.graph.2.bias",
+            ),
+            (
+                r"transformer.h.[0-9]+.attn.c_attn.weight",
+                r"transformer.blocks.[0-9]+.attn.qkv_proj.weight",
+            ),
+            (
+                r"transformer.h.[0-9]+.attn.c_attn.bias",
+                r"transformer.blocks.[0-9]+.attn.qkv_proj.bias",
+            ),
+            (
+                r"transformer.h.[0-9]+.attn.c_proj.weight",
+                r"transformer.blocks.[0-9]+.attn.out_proj.weight",
+            ),
+            (
+                r"transformer.h.[0-9]+.attn.c_proj.bias",
+                r"transformer.blocks.[0-9]+.attn.out_proj.bias",
+            ),
+            (
+                r"transformer.h.[0-9]+.ln_2.weight",
+                r"transformer.blocks.[0-9]+.ln_2.graph.2.weights",
+            ),
+            (
+                r"transformer.h.[0-9]+.ln_2.bias",
+                r"transformer.blocks.[0-9]+.ln_2.graph.2.bias",
+            ),
+            (
+                r"transformer.h.[0-9]+.mlp.c_fc.weight",
+                r"transformer.blocks.[0-9]+.mlp.0.weight",
+            ),
+            (
+                r"transformer.h.[0-9]+.mlp.c_fc.bias",
+                r"transformer.blocks.[0-9]+.mlp.0.bias",
+            ),
+            (
+                r"transformer.h.[0-9]+.mlp.c_proj.weight",
+                r"transformer.blocks.[0-9]+.mlp.2.weight",
+            ),
+            (
+                r"transformer.h.[0-9]+.mlp.c_proj.bias",
+                r"transformer.blocks.[0-9]+.mlp.2.bias",
+            ),
+            (r"transformer.ln_f.weight", r"transformer.ln_f.graph.2.weights"),
+            (r"transformer.ln_f.bias", r"transformer.ln_f.graph.2.bias"),
+            (r"lm_head.weight", r"lm_head.weight"),
+        )
         override_args = override_args or {}  # default to empty dict
         # only dropout can be overridden see more notes below
         assert all(k == "dropout" for k in override_args)
         from transformers import GPT2LMHeadModel
 
-        print("loading weights from pretrained gpt: %s" % model_type)
+        print("Loading weights from pretrained gpt: %s" % model_type)
 
         # n_layer, n_head and n_embd are determined from model_type
         config_args = {
-            PreTrainedGPT.GPT2: dict(
-                n_layers=12, n_heads=12, d_model=768
-            ),  # 124M params
-            PreTrainedGPT.GPT2_MEDIUM: dict(
-                n_layers=24, n_heads=16, d_model=1024
-            ),  # 350M params
-            PreTrainedGPT.GPT2_LARGE: dict(
-                n_layers=36, n_heads=20, d_model=1280
-            ),  # 774M params
-            PreTrainedGPT.GPT2_XL: dict(
-                n_layers=48, n_heads=25, d_model=1600
-            ),  # 1558M params
+            "gpt2": dict(n_layers=12, n_heads=12, d_model=768),  # 124M params
+            "gpt2-medium": dict(n_layers=24, n_heads=16, d_model=1024),  # 350M params
+            "gpt2-large": dict(n_layers=36, n_heads=20, d_model=1280),  # 774M params
+            "gpt2-xl": dict(n_layers=48, n_heads=25, d_model=1600),  # 1558M params
         }[model_type]
         print("forcing vocab_size=50257, block_size=1024, bias=True")
         config_args["vocab_size"] = 50257  # always 50257 for GPT model checkpoints
         config_args["block_size"] = 1024  # always 1024 for GPT model checkpoints
         config_args["bias"] = bool(True)  # always True for GPT model checkpoints
+        config_args["dropout"] = 0.1
         # we can override the dropout rate, if desired
         if "dropout" in override_args:
             print(f"overriding dropout rate to {override_args['dropout']}")
@@ -194,33 +236,42 @@ class GPT(nn.Module):
         # copy while ensuring all of the parameters are aligned and match in names and shapes
         sd_keys_hf = sd_hf.keys()
         sd_keys_hf = [
-            k for k in sd_keys_hf if not k.endswith(".attn.masked_bias")
+            k
+            for k in sd_keys_hf
+            if not (k.endswith(".attn.masked_bias") or k.endswith(".attn.bias"))
         ]  # ignore these, just a buffer
-        sd_keys_hf = [
-            k for k in sd_keys_hf if not k.endswith(".attn.bias")
-        ]  # same, just the mask (buffer)
         transposed = [
             "attn.c_attn.weight",
             "attn.c_proj.weight",
             "mlp.c_fc.weight",
             "mlp.c_proj.weight",
         ]
+        for k, k_hf in zip(sd_keys, sd_keys_hf):
+            print(f"{k_hf} : {k}")
         # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
         # this means that we have to transpose these weights when we import them
-        assert len(sd_keys_hf) == len(
-            sd_keys
-        ), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
         for k in sd_keys_hf:
+            # This disgusting HACK is required because I insist on being able to name things whatever I want.
+            try:
+                mapped_reg = [
+                    loc_reg for hf_reg, loc_reg in PARAM_MAP if re.match(hf_reg, k)
+                ][0]
+                mapped_key = [
+                    loc_key for loc_key in sd_keys if re.match(mapped_reg, loc_key)
+                ][0]
+            except IndexError as e:
+                print(f"Unmatched key: {k}.")
+                raise e
             if any(k.endswith(w) for w in transposed):
                 # special treatment for the Conv1D weights we need to transpose
-                assert sd_hf[k].shape[::-1] == sd[k].shape
+                assert sd_hf[k].shape[::-1] == sd[mapped_key].shape
                 with torch.no_grad():
-                    sd[k].copy_(sd_hf[k].t())
+                    sd[mapped_key].copy_(sd_hf[k].t())
             else:
                 # vanilla copy over the other parameters
-                assert sd_hf[k].shape == sd[k].shape
+                assert sd_hf[k].shape == sd[mapped_key].shape
                 with torch.no_grad():
-                    sd[k].copy_(sd_hf[k])
+                    sd[mapped_key].copy_(sd_hf[k])
 
         return model
 

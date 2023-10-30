@@ -1,0 +1,16 @@
+n_channels: 63
+pre_norm_shift: true
+pre_norm_scale: true
+pre_norm_affine: true
+pre_norm_bias: false
+encoder_block_size: 100
+encoder_d_model: 384
+encoder_n_heads: 6
+encoder_n_layers: 6
+encoder_bias: true
+encoder_dropout: 0.1
+pretrained_gpt: gpt2
+freeze_gpt: true
+gpt_start_token: 505257
+gpt_stop_token: 50256
+gpt_block_size: 10

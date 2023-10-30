@@ -5,7 +5,7 @@ import lightning.pytorch as pl
 import torch
 import yaml
 
-from telepath import Telepath, TelepathConfig
+from .telepath import Telepath, TelepathConfig
 
 OPTIMIZERS = {
     "adam": torch.optim.Adam,
@@ -20,17 +20,25 @@ LR_SCHEDULERS = {
 }
 
 
+def pass_notation(params: dict[str, Any]) -> dict[str, Any]:
+    for k, v in params.items():
+        if isinstance(v, str):
+            try:
+                params[k] = float(v)
+            except ValueError:
+                pass
+    return params
+
+
 @dataclass
 class TrainingConfig:
     batch_size: int
     epochs: int
-    lr: float
-    lr_scheduler: str
-    lr_scheduler_interval: str
-    lr_scheduler_params: dict[str, Any]
 
     @classmethod
-    def from_dict(cls, config: dict[str, Any]):
+    def from_yaml(cls, path: str):
+        with open(path, "r") as f:
+            config = yaml.safe_load(f)
         return cls(**config)
 
 
@@ -42,8 +50,12 @@ class OptimizerConfig:
     lr_scheduler_params: dict[str, Any] | None = None
 
     @classmethod
-    def from_dict(cls, config: dict[str, Any]):
-        optim = OPTIMIZERS[config.pop("name")]
+    def from_yaml(cls, path: str):
+        with open(path, "r") as f:
+            config = yaml.safe_load(f)
+        config["optim_params"] = pass_notation(config["optim_params"])
+        config["lr_scheduler_params"] = pass_notation(config["lr_scheduler_params"])
+        optim = OPTIMIZERS[config.pop("optim")]
         lr_scheduler = LR_SCHEDULERS[config.pop("lr_scheduler")]
         return cls(optim=optim, lr_scheduler=lr_scheduler, **config)
 
@@ -75,7 +87,7 @@ class TelepathLightningWrapper(pl.LightningModule):
 
     def configure_optimizers(self):
         param_groups = self.model.encoder.optim_groups(
-            self.optimzer_config.optim_params.pop("weight_decay")
+            self.optimizer_config.optim_params.pop("weight_decay")
         )
         if not self.config.freeze_gpt:
             param_groups.extend(
@@ -84,6 +96,13 @@ class TelepathLightningWrapper(pl.LightningModule):
                 )
             )
 
-        return self.optimizer_config.optim(
+        optim = self.optimizer_config.optim(
             param_groups, **self.optimizer_config.optim_params
         )
+        if self.optimizer_config.lr_scheduler is not None:
+            lr_scheduler = self.optimizer_config.lr_scheduler(
+                optim, **self.optimizer_config.lr_scheduler_params
+            )
+            return [optim], [lr_scheduler]
+        else:
+            return optim

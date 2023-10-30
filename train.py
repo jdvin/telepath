@@ -1,14 +1,13 @@
 import argparse
 from datasets import load_dataset
 from lightning.pytorch.loggers import WandbLogger
-import lighting.pytorch as pl
+import lightning.pytorch as pl
 import torch
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, PreTrainedTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
-from .utils.data_utils import get_dataset
-from .src.telepath import TelepathConfig, Telepath
-from .src.lightning_wrapper import (
+from utils.data_utils import get_dataset
+from src.lightning_wrapper import (
     TelepathLightningWrapper,
     TrainingConfig,
     OptimizerConfig,
@@ -43,23 +42,28 @@ def main(
         assert max_length is not None
         assert num_channels is not None
         assert num_samples is not None
-        tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-        assert isinstance(tokenizer, PreTrainedTokenizer)
+        tokenizer: PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(
+            tokenizer_path
+        )
+        assert isinstance(
+            tokenizer, PreTrainedTokenizerFast
+        ), f"Expected PreTrainedTokenizer, got {type(tokenizer)}."
     else:
-        tokenizer = None
-
-    ds = get_dataset(
-        path=dataset_path,
-        add_transform=add_transform,
-        tokenizer=tokenizer,
-        max_length=max_length,
-        num_channels=num_channels,
-        num_samples=num_samples,
-    )
+        tokenizer = None  # type: ignore
 
     # Create model.
     lmodel = TelepathLightningWrapper(
         model_config_path=model_config_path, optimizer_config_path=optimizer_config_path
+    )
+    ds = get_dataset(
+        path=dataset_path,
+        add_transform=add_transform,
+        tokenizer=tokenizer,
+        start_token_id=lmodel.config.gpt_start_token,
+        pad_token_id=lmodel.config.gpt_stop_token,
+        max_length=max_length,
+        num_channels=num_channels,
+        num_samples=num_samples,
     )
 
     # Create logger.
