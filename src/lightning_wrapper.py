@@ -72,14 +72,14 @@ class TelepathLightningWrapper(pl.LightningModule):
                 param.requires_grad = False
 
     def training_step(self, batch, batch_idx):
-        eeg, tokens = batch
+        eeg, tokens = batch["eeg"], batch["input_ids"]
         pred_tokens = self.model(eeg, tokens)
         loss = self.model.decoder.loss(pred_tokens, tokens)
         self.log("train_loss", loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        eeg, tokens = batch
+        eeg, tokens = batch["eeg"], batch["input_ids"]
         pred_tokens = self.model(eeg, tokens)
         loss = self.model.decoder.loss(pred_tokens, tokens)
         self.log("eval_loss", loss)

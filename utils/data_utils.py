@@ -30,6 +30,7 @@ parser.add_argument("--output_path", type=str)
 def get_transform(
     tokenizer: transformers.PreTrainedTokenizer,
     start_token_id: int,
+    stop_token_id: int,
     pad_token_id: int,
     max_length: int,
     num_channels: int,
@@ -43,24 +44,31 @@ def get_transform(
 
     # Define transformation function with parameters.
     def transform(batch) -> dict[str, torch.Tensor]:
-        batch["eeg"] = torch.tensor(batch["eeg"]).reshape(-1, num_channels, num_samples)
+        batch_size = len(batch["object"])
+        transformed_batch = {}
+        transformed_batch["eeg"] = (
+            torch.tensor(batch["eeg"])
+            .reshape(-1, num_channels, num_samples)
+            .to(torch.float32)
+        )
         objects = [object_id_to_word[object_id] for object_id in batch["object"]]
-        batch["input_ids"] = tokenizer.encode(
+        transformed_batch["input_ids"] = tokenizer.batch_encode_plus(
             objects,
             padding="max_length",
             truncation=True,
-            max_length=max_length - 1,
+            max_length=max_length - 2,
             return_tensors="pt",
-        )
-        batch["input_ids"] = torch.cat(
-            (
-                torch.full((batch["input_ids"].size(0), 1), start_token_id),
-                batch["input_ids"],
+        )["input_ids"]
+        transformed_batch["input_ids"] = torch.cat(
+            (  # type: ignore
+                torch.full((batch_size, 1), start_token_id),
+                transformed_batch["input_ids"],
+                torch.full((batch_size, 1), stop_token_id),
             ),
             dim=1,
         )
 
-        return batch
+        return transformed_batch
 
     return transform
 
@@ -131,6 +139,7 @@ def get_dataset(
     add_transform: bool = True,
     tokenizer: transformers.PreTrainedTokenizer | None = None,
     start_token_id: int | None = None,
+    stop_token_id: int | None = None,
     pad_token_id: int | None = None,
     max_length: int | None = None,
     num_channels: int | None = None,
@@ -145,11 +154,13 @@ def get_dataset(
         assert num_channels is not None
         assert num_samples is not None
         assert start_token_id is not None
+        assert stop_token_id is not None
         assert pad_token_id is not None
         transform_fn = get_transform(
             tokenizer=tokenizer,
             max_length=max_length,
             start_token_id=start_token_id,
+            stop_token_id=stop_token_id,
             pad_token_id=pad_token_id,
             num_channels=num_channels,
             num_samples=num_samples,

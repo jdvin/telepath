@@ -60,6 +60,7 @@ def main(
         add_transform=add_transform,
         tokenizer=tokenizer,
         start_token_id=lmodel.config.gpt_start_token,
+        stop_token_id=lmodel.config.gpt_stop_token,
         pad_token_id=lmodel.config.gpt_stop_token,
         max_length=max_length,
         num_channels=num_channels,
