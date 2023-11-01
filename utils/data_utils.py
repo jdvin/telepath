@@ -48,7 +48,8 @@ def get_transform(
         transformed_batch = {}
         transformed_batch["eeg"] = (
             torch.tensor(batch["eeg"])
-            .reshape(-1, num_channels, num_samples)
+            .view(batch_size, num_channels, num_samples)
+            .transpose(1, 2)
             .to(torch.float32)
         )
         objects = [object_id_to_word[object_id] for object_id in batch["object"]]

@@ -48,7 +48,7 @@ class WaveNetEncoder(nn.Module):
 
 
 class AttentionEncoderBlock(nn.Module):
-    # TODO: Should probably be reccurent to take advantage of EEG signal from prior objects..
+    # TODO: Should probably be recurrent to take advantage of EEG signal from prior objects..
     def __init__(
         self, block_size: int, d_model: int, n_heads: int, bias: bool, dropout: float
     ):

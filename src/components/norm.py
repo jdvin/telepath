@@ -27,7 +27,7 @@ class Affine(nn.Module):
         if bias:
             self.bias = torch.nn.Parameter(torch.zeros(self.size))
         else:
-            self.bias = torch.zeros(self.size)
+            self.register_buffer("bias", torch.zeros(self.size))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.weights * x + self.bias

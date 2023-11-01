@@ -21,12 +21,19 @@ def test_transform():
         "object": ["dog", "cat", "fish"],
         "eeg": [[1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 6]],
     }
-    transformed_batch: dict[str, torch.Tensor] = transform(batch)
+    # import pdb
 
+    # pdb.set_trace()
+    transformed_batch: dict[str, torch.Tensor] = transform(batch)
+    # The transformation should take a batch of cancatenated channel signals over time and batch of nested sample from all channels per time step.
     assert torch.equal(
         transformed_batch["eeg"],
         torch.tensor(
-            [[[1, 2, 3], [4, 5, 6]], [[1, 2, 3], [4, 5, 6]], [[1, 2, 3], [4, 5, 6]]]
+            [
+                [[1, 4], [2, 5], [3, 6]],
+                [[1, 4], [2, 5], [3, 6]],
+                [[1, 4], [2, 5], [3, 6]],
+            ]
         ),
     )
     assert isinstance(transformed_batch["input_ids"], torch.Tensor)
