@@ -33,7 +33,7 @@ class TelepathConfig:
     gpt_bias: bool = True
     gpt_n_layers: int = 12
     gpt_vocab_size: int = 50257
-    gpt_block_size: int = 10
+    gpt_block_size: int = 110
     gpt_dropout: float = 0.1
 
     @classmethod

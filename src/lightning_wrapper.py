@@ -3,6 +3,7 @@ from typing import Any
 
 import lightning.pytorch as pl
 import torch
+from torch.nn import functional as F
 import yaml
 
 from .telepath import Telepath, TelepathConfig
@@ -73,15 +74,17 @@ class TelepathLightningWrapper(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         eeg, tokens = batch["eeg"], batch["input_ids"]
-        pred_tokens = self.model(eeg, tokens)
-        loss = self.model.decoder.loss(pred_tokens, tokens)
+        logits = self.model(eeg, tokens)[:, eeg.size(-2) :, :]
+        targets = F.one_hot(tokens, num_classes=self.config.gpt_vocab_size)
+        loss = self.model.decoder.loss(logits, targets)
         self.log("train_loss", loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
         eeg, tokens = batch["eeg"], batch["input_ids"]
-        pred_tokens = self.model(eeg, tokens)
-        loss = self.model.decoder.loss(pred_tokens, tokens)
+        logits = self.model(eeg, tokens)[:, eeg.size(-2) :, :]
+        targets = F.one_hot(tokens, num_classes=self.config.gpt_vocab_size)
+        loss = self.model.decoder.loss(logits, targets)
         self.log("eval_loss", loss)
         return loss
 

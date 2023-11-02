@@ -81,26 +81,33 @@ class GPT(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def loss(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # import pdb
+
+        # pdb.set_trace()
         return F.cross_entropy(
             logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
         )
 
     def forward(
-        self, x: torch.Tensor, concat_embed: torch.Tensor | None = None
+        self,
+        x: torch.Tensor,
+        concat_embed: torch.Tensor | None = None,
+        inference: bool = False,
     ) -> torch.Tensor:
         # TODO: KV cache.
-        device = x.device
         # B x T x D.
         tok_emb = self.transformer.wte(x)  # type: ignore
         if concat_embed is not None:
             tok_emb = torch.cat([concat_embed, tok_emb], dim=1)
-        pos_emb = self.transformer.wpe(x)  # type: ignore
+        T = tok_emb.size(1)
+        pos = torch.arange(0, T, dtype=torch.long, device=x.device)
+        pos_emb = self.transformer.wpe(pos)  # type: ignore
         x = self.transformer.drop(tok_emb + pos_emb)  # type: ignore
         for block in self.transformer.blocks:  # type: ignore
             x = block(x)
         x = self.transformer.ln_f(x)  # type: ignore
 
-        if self.training:
+        if not inference:
             logits: torch.Tensor = self.lm_head(x)
         else:
             # Return logits for final token of each sequence. Nesting the last dim in a list ensures that it is not flattened.
@@ -115,7 +122,7 @@ class GPT(nn.Module):
         max_length: int = 10,
         stop_token: int = 50256,
     ) -> torch.Tensor:
-        """Generate a sequence of tokens.
+        """Generate a sequence of tokens using argmax sampling.
         Attributes:
             input_ids: Input token ids of shape (batch_size, n_tokens).
             concat_embed: Concatenated embeddings of shape (batch_size, k, d_model).
@@ -123,7 +130,7 @@ class GPT(nn.Module):
             stop_token: Token id of the stop token.
         """
         for _ in range(max_length):
-            logits = self.forward(input_ids, concat_embed)
+            logits = self.forward(input_ids, concat_embed, inference=True)
             input_ids = torch.cat([input_ids, logits.argmax(dim=-1)], dim=1)
             if (input_ids == stop_token).any():
                 break
@@ -246,8 +253,6 @@ class GPT(nn.Module):
             "mlp.c_fc.weight",
             "mlp.c_proj.weight",
         ]
-        for k, k_hf in zip(sd_keys, sd_keys_hf):
-            print(f"{k_hf} : {k}")
         # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
         # this means that we have to transpose these weights when we import them
         for k in sd_keys_hf:

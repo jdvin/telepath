@@ -4,7 +4,7 @@ pre_norm_scale: true
 pre_norm_affine: true
 pre_norm_bias: false
 encoder_block_size: 100
-encoder_d_model: 384
+encoder_d_model: 768
 encoder_n_heads: 6
 encoder_n_layers: 6
 encoder_bias: true
@@ -13,4 +13,4 @@ pretrained_gpt: gpt2
 freeze_gpt: true
 gpt_start_token: 50257
 gpt_stop_token: 50256
-gpt_block_size: 10
+gpt_block_size: 110
