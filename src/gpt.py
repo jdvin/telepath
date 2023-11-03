@@ -81,9 +81,6 @@ class GPT(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def loss(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        # import pdb
-
-        # pdb.set_trace()
         return F.cross_entropy(
             logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
         )
@@ -264,6 +261,10 @@ class GPT(nn.Module):
                 mapped_key = [
                     loc_key for loc_key in sd_keys if re.match(mapped_reg, loc_key)
                 ][0]
+                # import pdb
+
+                # pdb.set_trace()
+                sd_keys.remove(mapped_key)
             except IndexError as e:
                 print(f"Unmatched key: {k}.")
                 raise e
@@ -271,12 +272,16 @@ class GPT(nn.Module):
                 # special treatment for the Conv1D weights we need to transpose
                 assert sd_hf[k].shape[::-1] == sd[mapped_key].shape
                 with torch.no_grad():
-                    sd[mapped_key].copy_(sd_hf[k].t())
+                    sd[mapped_key].copy_(sd_hf.pop(k).t())
             else:
                 # vanilla copy over the other parameters
                 assert sd_hf[k].shape == sd[mapped_key].shape
                 with torch.no_grad():
-                    sd[mapped_key].copy_(sd_hf[k])
+                    sd[mapped_key].copy_(sd_hf.pop(k))
+
+        # import pdb
+
+        # pdb.set_trace()
 
         return model
 

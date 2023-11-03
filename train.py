@@ -71,8 +71,8 @@ def main(
     logger = WandbLogger(project="telepath")
 
     # Create data loaders.
-    train_dataloader = DataLoader(ds["train"], batch_size=32)  # type: ignore
-    val_dataloader = DataLoader(ds["test"], batch_size=32)  # type: ignore
+    train_dataloader = DataLoader(ds["train"], batch_size=4)  # type: ignore
+    val_dataloader = DataLoader(ds["test"], batch_size=4)  # type: ignore
 
     # Create trainer.
     trainer = pl.Trainer(accelerator="mps", val_check_interval=0.1, logger=logger)

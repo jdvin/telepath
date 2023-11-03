@@ -74,17 +74,15 @@ class TelepathLightningWrapper(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         eeg, tokens = batch["eeg"], batch["input_ids"]
-        logits = self.model(eeg, tokens)[:, eeg.size(-2) :, :]
-        targets = F.one_hot(tokens, num_classes=self.config.gpt_vocab_size)
-        loss = self.model.decoder.loss(logits, targets)
+        logits = self.model(eeg, tokens)[:, eeg.size(-2) :, :].clone()
+        loss = self.model.decoder.loss(logits, tokens)
         self.log("train_loss", loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
         eeg, tokens = batch["eeg"], batch["input_ids"]
-        logits = self.model(eeg, tokens)[:, eeg.size(-2) :, :]
-        targets = F.one_hot(tokens, num_classes=self.config.gpt_vocab_size)
-        loss = self.model.decoder.loss(logits, targets)
+        logits = self.model(eeg, tokens)[:, eeg.size(-2) :, :].clone()
+        loss = self.model.decoder.loss(logits, tokens)
         self.log("eval_loss", loss)
         return loss
 
