@@ -22,6 +22,8 @@ class Block(nn.Module):
             proj_bias=bias,
             block_size=block_size,
             dropout=dropout,
+            is_causal=True,
+            flash=False,
         )
         self.ln_2 = LayerNorm(d_model, affine=True, bias=bias)
         self.mlp = nn.Sequential(

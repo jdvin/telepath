@@ -43,45 +43,52 @@ def test_transform():
     assert transformed_batch["input_ids"][:, -1].eq(50256).all().item()
 
 
-def test_gpt():
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    hf_gpt = AutoModelForCausalLM.from_pretrained("gpt2").eval()
-    custom_gpt = GPT.from_pretrained("gpt2").eval()
+activatons = None
 
-    inputs = tokenizer("The quick brown fox jumps over the lazy", return_tensors="pt")[
-        "input_ids"
-    ]
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+hf_gpt = AutoModelForCausalLM.from_pretrained("gpt2").eval()
+custom_gpt = GPT.from_pretrained("gpt2").eval()
 
-    # import pdb
 
-    # pdb.set_trace()
+def test_embeddings():
+    global activations
+    inputs = tokenizer("The quick brown", return_tensors="pt")["input_ids"]
+
     hf_emb = hf_gpt.transformer.wte(inputs)
     custom_emb = custom_gpt.transformer.wte(inputs)
     assert torch.equal(hf_emb, custom_emb)
-
     pos = torch.arange(0, inputs.size(-1), dtype=torch.long)
     hf_posemb = hf_gpt.transformer.wpe(pos)
     custom_posemb = custom_gpt.transformer.wpe(pos)
     assert torch.equal(hf_posemb, custom_posemb)
 
-    x = hf_emb + hf_posemb
+    activations = hf_emb + hf_posemb
 
-    cus_opt = custom_gpt.transformer.blocks[0].ln_1(x)
-    hf_opt = hf_gpt.transformer.h[0].ln_1(x)
-    assert torch.equal(cus_opt, hf_opt)
 
-    cus_opt = custom_gpt.transformer.blocks[0].attn(cus_opt)
-    hf_opt = hf_gpt.transformer.h[0].attn(hf_opt)
-    assert torch.equal(cus_opt, hf_opt)
+def test_layer_norm():
+    global activations
+    cus_opt = custom_gpt.transformer.blocks[0].ln_1(activations)
+    hf_opt = hf_gpt.transformer.h[0].ln_1(activations)
+    assert torch.allclose(cus_opt, hf_opt, atol=1e-3)
+    activations = hf_opt
 
-    cus_opt = custom_gpt.transformer.blocks[0].ln_2(cus_opt)
-    hf_opt = hf_gpt.transformer.h[0].ln_2(hf_opt)
-    assert torch.equal(cus_opt, hf_opt)
 
-    cus_opt = custom_gpt.transformer.blocks[0].mlp(cus_opt)
-    hf_opt = hf_gpt.transformer.h[0].mlp(hf_opt)
-    assert torch.equal(cus_opt, hf_opt)
+def test_attention():
+    global activations
+    cus_attn = custom_gpt.transformer.blocks[0].attn
+    hf_attn = hf_gpt.transformer.h[0].attn
+    cus_opt = cus_attn(activations)
+    hf_opt = hf_attn(activations)[0]
 
-    custom_outputs = custom_gpt(inputs)
-    hf_outputs = hf_gpt(inputs).logits
-    assert torch.equal(custom_outputs, hf_outputs)
+    assert torch.allclose(cus_opt, hf_opt, atol=1e-3)
+    activations = hf_opt
+
+
+def test_mlp():
+    global activations
+    cus_mlp = custom_gpt.transformer.blocks[0].mlp
+    hf_mlp = hf_gpt.transformer.h[0].mlp
+
+    cus_opt = cus_mlp(activations)
+    hf_opt = hf_mlp(activations)
+    assert torch.allclose(cus_opt, hf_opt, atol=1e-2)

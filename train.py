@@ -75,7 +75,13 @@ def main(
     val_dataloader = DataLoader(ds["test"], batch_size=4)  # type: ignore
 
     # Create trainer.
-    trainer = pl.Trainer(accelerator="mps", val_check_interval=0.1, logger=logger)
+    trainer = pl.Trainer(
+        accelerator="mps",
+        val_check_interval=0.1,
+        logger=logger,
+        log_every_n_steps=8,
+        accumulate_grad_batches=8,
+    )
 
     # train
     trainer.fit(lmodel, train_dataloader, val_dataloader)

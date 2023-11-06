@@ -21,7 +21,7 @@ class MultiheadAttention(torch.nn.Module):
         # Functionally equivalent to having a smaller `d_model` which is duplicated across heads.
         assert d_model % n_heads == 0
         self.d_model = d_model
-        self.n_heads = d_model
+        self.n_heads = n_heads
         self.dropout = dropout
         self.is_causal = is_causal
         # Batched projection from input (B x T x D)
