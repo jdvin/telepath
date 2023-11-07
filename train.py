@@ -77,6 +77,7 @@ def main(
     # Create trainer.
     trainer = pl.Trainer(
         accelerator="mps",
+        max_epochs=5,
         val_check_interval=0.1,
         logger=logger,
         log_every_n_steps=8,
@@ -84,7 +85,9 @@ def main(
     )
 
     # train
-    trainer.fit(lmodel, train_dataloader, val_dataloader)
+    trainer.fit(
+        lmodel, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader
+    )
 
     # save
     torch.save(lmodel.model.state_dict(), f"chekpoints/{run_name}_model.pt")
