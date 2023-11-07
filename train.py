@@ -1,16 +1,17 @@
 import argparse
+
 from datasets import load_dataset
-from lightning.pytorch.loggers import WandbLogger
-import lightning.pytorch as pl
 import torch
+from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
+import wandb
 
 from utils.data_utils import get_dataset
-from src.lightning_wrapper import (
-    TelepathLightningWrapper,
+from utils.train_utils import load_yaml, get_batch
+from src.wrapper import (
+    TelepathWrapper,
     TrainingConfig,
-    OptimizerConfig,
 )
 
 parser = argparse.ArgumentParser()
@@ -24,6 +25,13 @@ parser.add_argument("--tokenizer_path", type=str)
 parser.add_argument("--max_length", type=int)
 parser.add_argument("--num_channels", type=int)
 parser.add_argument("--num_samples", type=int)
+parser.add_argument("--accelerator", type=str, default="mps")
+
+NUM_EPOCHS = 5
+BATCH_SIZE = 32
+MICRO_BATCH_SIZE = 4
+VALIDATION_INTERVAL = 0.1
+LOG_INTERVAL = 1
 
 
 def main(
@@ -37,6 +45,8 @@ def main(
     model_config_path: str,
     optimizer_config_path: str,
 ):
+    torch.manual_seed(42)
+
     if add_transform:
         assert tokenizer_path is not None
         assert max_length is not None
@@ -52,42 +62,58 @@ def main(
         tokenizer = None  # type: ignore
 
     # Create model.
-    lmodel = TelepathLightningWrapper(
+    wmodel = TelepathWrapper(
         model_config_path=model_config_path, optimizer_config_path=optimizer_config_path
     )
     ds = get_dataset(
         path=dataset_path,
         add_transform=add_transform,
         tokenizer=tokenizer,
-        start_token_id=lmodel.config.gpt_start_token,
-        stop_token_id=lmodel.config.gpt_stop_token,
-        pad_token_id=lmodel.config.gpt_stop_token,
+        start_token_id=wmodel.config.gpt_start_token,
+        stop_token_id=wmodel.config.gpt_stop_token,
+        pad_token_id=wmodel.config.gpt_stop_token,
         max_length=max_length,
         num_channels=num_channels,
         num_samples=num_samples,
     )
-
-    # Create logger.
-    logger = WandbLogger(project="telepath")
+    config = {
+        "model": load_yaml(model_config_path),
+        "optim": load_yaml(model_config_path),
+    }
+    wandb.init(project="telepath", name=run_name, config=config)
 
     # Create data loaders.
-    train_dataloader = DataLoader(ds["train"], batch_size=4)  # type: ignore
-    val_dataloader = DataLoader(ds["test"], batch_size=4)  # type: ignore
+    train_dataloader = DataLoader(ds["train"], batch_size=MICRO_BATCH_SIZE, shuffle=True, num_workers=8)  # type: ignore
+    val_dataloader = DataLoader(ds["test"], batch_size=MICRO_BATCH_SIZE, shuffle=True, num_workers=8)  # type: ignore
 
-    # Create trainer.
-    trainer = pl.Trainer(
-        accelerator="mps",
-        max_epochs=5,
-        val_check_interval=0.1,
-        logger=logger,
-        log_every_n_steps=8,
-        accumulate_grad_batches=8,
-    )
+    optim, lr_scheduler = wmodel.configure_optimizers()
+    epoch = 0
+    micro_step = 0
+    grad_accum_steps = BATCH_SIZE // MICRO_BATCH_SIZE
+    metrics = {"train_loss": 0, "val_loss": 0, "step": 0, "epoch": 0, "lr": 0}
+    micro_batch = get_batch(train_dataloader, "mps")
+    while True:
+        loss = wmodel.step("train", micro_batch)
+        loss = loss / grad_accum_steps
+        metrics["train_loss"] = loss.item()
+        micro_batch = get_batch(train_dataloader, "mps")
+        loss.backward()
+        micro_step += 1
 
-    # train
-    trainer.fit(
-        lmodel, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader
-    )
+        if micro_step % grad_accum_steps != 0:
+            continue
+
+        optim.step()
+        optim.zero_grad(set_to_none=True)
+        lr_scheduler.step()
+        metrics["train_loss"] = 0
+        # log other stuff
+        # check if we should eval
+        # reset stuff
+        for batch in val_dataloader:
+            loss = wmodel.step("val", batch)
+        if epoch == NUM_EPOCHS:
+            break
 
     # save
     torch.save(lmodel.model.state_dict(), f"chekpoints/{run_name}_model.pt")
