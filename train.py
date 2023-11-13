@@ -1,17 +1,15 @@
 import argparse
 
-from datasets import load_dataset
+from loguru import logger
 import torch
-from torch.optim import lr_scheduler
-from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
+from tqdm import tqdm
 import wandb
 
 from utils.data_utils import get_dataset
-from utils.train_utils import load_yaml, get_batch, TrainMetrics
+from utils.train_utils import load_yaml, get_batch, TrainMetrics, DataLoader
 from src.wrapper import (
     TelepathWrapper,
-    TrainingConfig,
 )
 
 parser = argparse.ArgumentParser()
@@ -48,6 +46,7 @@ def main(
     torch.manual_seed(42)
 
     if add_transform:
+        logger.infp("Adding transform to dataset.")
         assert tokenizer_path is not None
         assert max_length is not None
         assert num_channels is not None
@@ -60,11 +59,12 @@ def main(
         ), f"Expected PreTrainedTokenizer, got {type(tokenizer)}."
     else:
         tokenizer = None  # type: ignore
-
+    logger.info("Creating model instance.")
     # Create model.
     wmodel = TelepathWrapper(
         model_config_path=model_config_path, optimizer_config_path=optimizer_config_path
     )
+    logger.info("Loading dataset.")
     ds = get_dataset(
         path=dataset_path,
         add_transform=add_transform,
@@ -81,44 +81,64 @@ def main(
         "optim": load_yaml(model_config_path),
     }
     wandb.init(project="telepath", name=run_name, config=config)
-
+    logger.info("Creating data loaders.")
     # Create data loaders.
-    train_dataloader = DataLoader(ds["train"], batch_size=MICRO_BATCH_SIZE, shuffle=True, num_workers=8)  # type: ignore
-    val_dataloader = DataLoader(ds["test"], batch_size=MICRO_BATCH_SIZE, shuffle=True, num_workers=8)  # type: ignore
+    train_dataloader = DataLoader(
+        ds["train"], batch_size=MICRO_BATCH_SIZE, device="mps", shuffle=True
+    )
+    val_dataloader = DataLoader(
+        ds["test"], batch_size=MICRO_BATCH_SIZE, device="mps", shuffle=True
+    )
 
+    logger.info("Creating optimizer.")
     optim, lr_scheduler = wmodel.configure_optimizers()
-    epoch = 0
-    micro_step = 0
     grad_accum_steps = BATCH_SIZE // MICRO_BATCH_SIZE
     metrics = TrainMetrics()
-    micro_batch = get_batch(train_dataloader, "mps")
+    logger.info("Spinning dataloader.")
+    micro_batch = train_dataloader.get_batch()
+    logger.info("Beginning Training.")
+    pbar = tqdm(
+        total=len(train_dataloader), description=f"Epoch {metrics.epoch}/{NUM_EPOCHS}."
+    )
     while True:
-        loss = wmodel.step("train", micro_batch)
+        loss = wmodel.step(micro_batch)
         loss = loss / grad_accum_steps
         metrics.train_loss = loss.item()
-        micro_batch = get_batch(train_dataloader, "mps")
+        # Get the batch straight away without blocking whilst we compute the backward pass.
+        micro_batch = train_dataloader.get_batch()
         loss.backward()
-        micro_step += 1
 
         # If we are still accumulating gradients, then skip gradient application and logging.
-        if micro_step % grad_accum_steps != 0:
+        if metrics.microstep % grad_accum_steps != 0:
+            metrics.microstep += 1
             continue
 
         optim.step()
         optim.zero_grad(set_to_none=True)
         lr_scheduler.step()
-        metrics["train_loss"] = 0
-        # log other stuff
-        # check if we should eval
-        # reset stuff
+        metrics.step += 1
+        pbar.update()
+        if metrics.step % (len(train_dataloader) * VALIDATION_INTERVAL) == 0:
+            for micro_batch in val_dataloader:
+                metrics.val_loss += wmodel.step(micro_batch).item()
+            metrics.val_loss /= len(val_dataloader)
 
-        for micro_batch in val_dataloader:
-            loss = wmodel.step("val", batch)
-        if epoch == NUM_EPOCHS:
+        if metrics.step % (len(train_dataloader) * LOG_INTERVAL) == 0:
+            metrics.log()
+
+        if metrics.step % len(train_dataloader) == 0:
+            metrics.microstep += 1
+            metrics.epoch += 1
+            pbar = tqdm(
+                total=len(train_dataloader),
+                description=f"Epoch {metrics.epoch}/{NUM_EPOCHS}.",
+            )
+
+        if metrics.epoch == NUM_EPOCHS:
             break
 
     # save
-    torch.save(lmodel.model.state_dict(), f"chekpoints/{run_name}_model.pt")
+    torch.save(wmodel.model.state_dict(), f"chekpoints/{run_name}_model.pt")
 
 
 if __name__ == "__main__":

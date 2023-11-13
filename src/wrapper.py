@@ -73,7 +73,6 @@ class TelepathWrapper:
 
     def step(
         self,
-        step_type: str,
         batch: dict[str, torch.Tensor],
     ) -> torch.Tensor:
         eeg, tokens = batch["eeg"], batch["input_ids"]
