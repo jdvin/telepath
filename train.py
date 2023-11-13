@@ -8,7 +8,7 @@ from transformers import AutoTokenizer, PreTrainedTokenizerFast
 import wandb
 
 from utils.data_utils import get_dataset
-from utils.train_utils import load_yaml, get_batch
+from utils.train_utils import load_yaml, get_batch, TrainMetrics
 from src.wrapper import (
     TelepathWrapper,
     TrainingConfig,
@@ -90,16 +90,17 @@ def main(
     epoch = 0
     micro_step = 0
     grad_accum_steps = BATCH_SIZE // MICRO_BATCH_SIZE
-    metrics = {"train_loss": 0, "val_loss": 0, "step": 0, "epoch": 0, "lr": 0}
+    metrics = TrainMetrics()
     micro_batch = get_batch(train_dataloader, "mps")
     while True:
         loss = wmodel.step("train", micro_batch)
         loss = loss / grad_accum_steps
-        metrics["train_loss"] = loss.item()
+        metrics.train_loss = loss.item()
         micro_batch = get_batch(train_dataloader, "mps")
         loss.backward()
         micro_step += 1
 
+        # If we are still accumulating gradients, then skip gradient application and logging.
         if micro_step % grad_accum_steps != 0:
             continue
 
@@ -110,7 +111,8 @@ def main(
         # log other stuff
         # check if we should eval
         # reset stuff
-        for batch in val_dataloader:
+
+        for micro_batch in val_dataloader:
             loss = wmodel.step("val", batch)
         if epoch == NUM_EPOCHS:
             break
