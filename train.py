@@ -7,7 +7,7 @@ from tqdm import tqdm
 import wandb
 
 from utils.data_utils import get_dataset
-from utils.train_utils import load_yaml, get_batch, TrainMetrics, DataLoader
+from utils.train_utils import load_yaml, TrainMetrics, DataLoader
 from src.wrapper import (
     TelepathWrapper,
 )
@@ -23,7 +23,7 @@ parser.add_argument("--tokenizer_path", type=str)
 parser.add_argument("--max_length", type=int)
 parser.add_argument("--num_channels", type=int)
 parser.add_argument("--num_samples", type=int)
-parser.add_argument("--accelerator", type=str, default="mps")
+parser.add_argument("--device", type=str, default="mps")
 
 NUM_EPOCHS = 5
 BATCH_SIZE = 32
@@ -42,11 +42,12 @@ def main(
     num_samples: int,
     model_config_path: str,
     optimizer_config_path: str,
+    device: str,
 ):
     torch.manual_seed(42)
 
     if add_transform:
-        logger.infp("Adding transform to dataset.")
+        logger.info("Adding transform to dataset.")
         assert tokenizer_path is not None
         assert max_length is not None
         assert num_channels is not None
@@ -62,7 +63,9 @@ def main(
     logger.info("Creating model instance.")
     # Create model.
     wmodel = TelepathWrapper(
-        model_config_path=model_config_path, optimizer_config_path=optimizer_config_path
+        model_config_path=model_config_path,
+        optimizer_config_path=optimizer_config_path,
+        device=device,
     )
     logger.info("Loading dataset.")
     ds = get_dataset(
@@ -84,10 +87,10 @@ def main(
     logger.info("Creating data loaders.")
     # Create data loaders.
     train_dataloader = DataLoader(
-        ds["train"], batch_size=MICRO_BATCH_SIZE, device="mps", shuffle=True
+        ds["train"], batch_size=MICRO_BATCH_SIZE, device=device, shuffle=True
     )
     val_dataloader = DataLoader(
-        ds["test"], batch_size=MICRO_BATCH_SIZE, device="mps", shuffle=True
+        ds["test"], batch_size=MICRO_BATCH_SIZE, device=device, shuffle=True
     )
 
     logger.info("Creating optimizer.")
@@ -98,40 +101,41 @@ def main(
     micro_batch = train_dataloader.get_batch()
     logger.info("Beginning Training.")
     pbar = tqdm(
-        total=len(train_dataloader), description=f"Epoch {metrics.epoch}/{NUM_EPOCHS}."
+        total=len(train_dataloader), desc=f"Epoch {metrics.epoch}/{NUM_EPOCHS}."
     )
     while True:
         loss = wmodel.step(micro_batch)
         loss = loss / grad_accum_steps
-        metrics.train_loss = loss.item()
+        metrics.train_loss += loss.item()
         # Get the batch straight away without blocking whilst we compute the backward pass.
         micro_batch = train_dataloader.get_batch()
         loss.backward()
+        metrics.microstep += 1
 
         # If we are still accumulating gradients, then skip gradient application and logging.
         if metrics.microstep % grad_accum_steps != 0:
-            metrics.microstep += 1
+            metrics.step += 1
             continue
 
         optim.step()
         optim.zero_grad(set_to_none=True)
         lr_scheduler.step()
+        metrics.lr = lr_scheduler.get_last_lr()[0]
         metrics.step += 1
         pbar.update()
         if metrics.step % (len(train_dataloader) * VALIDATION_INTERVAL) == 0:
             for micro_batch in val_dataloader:
                 metrics.val_loss += wmodel.step(micro_batch).item()
-            metrics.val_loss /= len(val_dataloader)
+            metrics.val_loss = metrics.val_loss / len(val_dataloader)
 
-        if metrics.step % (len(train_dataloader) * LOG_INTERVAL) == 0:
+        if metrics.step % LOG_INTERVAL == 0:
             metrics.log()
 
         if metrics.step % len(train_dataloader) == 0:
-            metrics.microstep += 1
             metrics.epoch += 1
             pbar = tqdm(
                 total=len(train_dataloader),
-                description=f"Epoch {metrics.epoch}/{NUM_EPOCHS}.",
+                description=f"Epoch: {metrics.epoch}/{NUM_EPOCHS}.",
             )
 
         if metrics.epoch == NUM_EPOCHS:
@@ -153,4 +157,5 @@ if __name__ == "__main__":
         num_samples=args.num_samples,
         model_config_path=args.model_config_path,
         optimizer_config_path=args.optimizer_config_path,
+        device=args.device,
     )

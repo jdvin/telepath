@@ -25,7 +25,7 @@ class TrainMetrics:
             key.replace("_", "/"): value for key, value in {**metrics, **opt}.items()
         }
 
-        wandb.log(**metrics)
+        wandb.log(metrics)
         self.train_loss = 0
         self.val_loss = 0
 
@@ -37,28 +37,25 @@ class DataLoader:
         self.shuffle = shuffle
         self.device = device
         self.num_batches = math.ceil(len(dataset) / batch_size)
-        self.batch_index = 0
+        self.i = 0
 
     def reset(self):
-        self.batch_index = 0
+        self.i = 0
         self.batch_indexes = list(range(self.num_batches))
         if self.shuffle:
             random.shuffle(self.batch_indexes)
 
     def get_batch(self):
-        if self.batch_index % self.num_batches == 0:
+        if self.i % self.num_batches == 0:
             self.reset()
-        batch = self.dataset[
-            self.batch_index
-            * self.batch_size : (self.batch_index + 1)
-            * self.batch_size
-        ]
+        batch = self.dataset[self.i * self.batch_size : (self.i + 1) * self.batch_size]
+        self.i += 1
 
-        for key, value in batch:
-            if self.device == "cpu":
-                batch[key] = value.to(self.device)
-            else:
+        for key, value in batch.items():
+            if "cuda" in self.device:
                 batch[key] = value.pin_memory().to(self.device, non_blocking=True)
+            else:
+                batch[key] = value.to(self.device)
         return batch
 
     def __iter__(self):
@@ -73,7 +70,3 @@ def load_yaml(path: str):
     with open(path, "r") as f:
         config = yaml.safe_load(f)
     return config
-
-
-def get_batch(ds, idx, device: str) -> dict[str, torch.Tensor]:
-    batch = ds

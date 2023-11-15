@@ -61,10 +61,10 @@ class OptimizerConfig:
 
 
 class TelepathWrapper:
-    def __init__(self, model_config_path: str, optimizer_config_path: str):
+    def __init__(self, model_config_path: str, optimizer_config_path: str, device: str):
         super().__init__()
         self.config = TelepathConfig.from_yaml(model_config_path)
-        self.model = Telepath(self.config)
+        self.model = Telepath(self.config).to(device)
         self.optimizer_config = OptimizerConfig.from_yaml(optimizer_config_path)
 
         if self.config.freeze_gpt:
@@ -80,7 +80,7 @@ class TelepathWrapper:
         loss = self.model.decoder.loss(logits, tokens)
         return loss
 
-    def configure_optimizers(self) -> tuple:
+    def configure_optimizers(self, num_batches: int) -> tuple:
         param_groups = self.model.encoder.optim_groups(
             self.optimizer_config.optim_params.pop("weight_decay")
         )
@@ -95,7 +95,7 @@ class TelepathWrapper:
             param_groups, **self.optimizer_config.optim_params
         )
         lr_scheduler = self.optimizer_config.lr_scheduler(
-            optim, **self.optimizer_config.lr_scheduler_params
+            optim, **self.optimizer_config.lr_scheduler_params, T_max=num_batches
         )
 
         return optim, lr_scheduler
