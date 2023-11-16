@@ -6,3 +6,4 @@ This project exists in orbit around one fundamental question: to what extent can
 - How much do the EEG samples taken before or after the object was being viewed impact the accuracy of the model?
 - the GPT will intially be frozen under the assumption that finetuning it will modify its representations of the out-of-distribution validation examples such that their logits are effectively never sampled...is that true?
 - Are there more effective encoder architectures? (e.g., Meta's wave2vec2 with a pre-transformer convolution)?
+    - COGVLM but with a neural expert instead of a visual expert: https://arxiv.org/pdf/2311.03079.pdf
