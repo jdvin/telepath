@@ -4,6 +4,4 @@ optim_params:
   betas: [0.9, 0.99]
   eps: 1e-2
   weight_decay: 1e-2
-lr_scheduler: cosine_warmup
-lr_scheduler_params:
-  T_0: 100
+lr_scheduler: cosine

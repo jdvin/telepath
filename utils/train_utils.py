@@ -3,7 +3,6 @@ import math
 from typing import Any
 import random
 
-import torch
 import yaml
 import wandb
 
@@ -16,18 +15,23 @@ class TrainMetrics:
     step: int = 0
     epoch: int = 0
     lr: float = 0
-    opt: dict[str, Any] = field(default_factory=dict)
+    _past: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        self._past = {key: -1 for key in asdict(self).keys()}
 
     def log(self):
         metrics = asdict(self)
-        opt = metrics.pop("opt")
+        metrics.pop("_past")
+        # Only log values that have changed.
+        # TODO: Check if this is necessary.
         metrics = {
-            key.replace("_", "/"): value for key, value in {**metrics, **opt}.items()
+            key.replace("_", "/"): value
+            for key, value in metrics.items()
+            if self._past[key] != value
         }
 
         wandb.log(metrics)
-        self.train_loss = 0
-        self.val_loss = 0
 
 
 class DataLoader:

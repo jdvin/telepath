@@ -14,13 +14,12 @@ OPTIMIZERS = {
 }
 LR_SCHEDULERS = {
     "cosine": torch.optim.lr_scheduler.CosineAnnealingLR,
-    "cosine_warmup": torch.optim.lr_scheduler.CosineAnnealingWarmRestarts,
     "exponential": torch.optim.lr_scheduler.ExponentialLR,
     "linear": torch.optim.lr_scheduler.StepLR,
 }
 
 
-def pass_notation(params: dict[str, Any]) -> dict[str, Any]:
+def parse_notation(params: dict[str, Any]) -> dict[str, Any]:
     for k, v in params.items():
         if isinstance(v, str):
             try:
@@ -53,8 +52,10 @@ class OptimizerConfig:
     def from_yaml(cls, path: str):
         with open(path, "r") as f:
             config = yaml.safe_load(f)
-        config["optim_params"] = pass_notation(config["optim_params"])
-        config["lr_scheduler_params"] = pass_notation(config["lr_scheduler_params"])
+        config["optim_params"] = parse_notation(config["optim_params"])
+        config["lr_scheduler_params"] = parse_notation(
+            config.get("lr_scheduler_params", {})
+        )
         optim = OPTIMIZERS[config.pop("optim")]
         lr_scheduler = LR_SCHEDULERS[config.pop("lr_scheduler")]
         return cls(optim=optim, lr_scheduler=lr_scheduler, **config)

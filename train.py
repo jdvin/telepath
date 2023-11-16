@@ -94,13 +94,14 @@ def main(
     )
 
     logger.info("Creating optimizer.")
-    optim, lr_scheduler = wmodel.configure_optimizers()
+    optim, lr_scheduler = wmodel.configure_optimizers(num_batches=len(train_dataloader))
     grad_accum_steps = BATCH_SIZE // MICRO_BATCH_SIZE
     metrics = TrainMetrics()
+    metrics.lr = lr_scheduler.get_last_lr()[0]
     logger.info("Spinning dataloader.")
     micro_batch = train_dataloader.get_batch()
     logger.info("Beginning Training.")
-    pbar = tqdm(
+    train_pbar = tqdm(
         total=len(train_dataloader), desc=f"Epoch {metrics.epoch}/{NUM_EPOCHS}."
     )
     while True:
@@ -110,30 +111,36 @@ def main(
         # Get the batch straight away without blocking whilst we compute the backward pass.
         micro_batch = train_dataloader.get_batch()
         loss.backward()
-        metrics.microstep += 1
 
         # If we are still accumulating gradients, then skip gradient application and logging.
-        if metrics.microstep % grad_accum_steps != 0:
-            metrics.step += 1
+        # First term is a HACK to stop the step logic from being run on the first microstep.
+        if metrics.microstep and metrics.microstep % grad_accum_steps != 0:
+            metrics.microstep += 1
             continue
 
         optim.step()
         optim.zero_grad(set_to_none=True)
         lr_scheduler.step()
-        metrics.lr = lr_scheduler.get_last_lr()[0]
-        metrics.step += 1
-        pbar.update()
-        if metrics.step % (len(train_dataloader) * VALIDATION_INTERVAL) == 0:
+        train_pbar.update()
+        if metrics.step % int(len(train_dataloader) * VALIDATION_INTERVAL) == 0:
+            metrics.val_loss = 0
+            val_pbar = tqdm(total=len(val_dataloader), desc="Running validation")
             for micro_batch in val_dataloader:
+                val_pbar.update()
                 metrics.val_loss += wmodel.step(micro_batch).item()
             metrics.val_loss = metrics.val_loss / len(val_dataloader)
 
         if metrics.step % LOG_INTERVAL == 0:
             metrics.log()
 
+        metrics.train_loss = 0
+        metrics.step += 1
+        metrics.microstep += 1
+        metrics.lr = lr_scheduler.get_last_lr()[0]
+
         if metrics.step % len(train_dataloader) == 0:
             metrics.epoch += 1
-            pbar = tqdm(
+            train_pbar = tqdm(
                 total=len(train_dataloader),
                 description=f"Epoch: {metrics.epoch}/{NUM_EPOCHS}.",
             )
