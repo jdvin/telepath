@@ -9,16 +9,16 @@ This project exists in orbit around one fundamental question: to what extent can
     - COGVLM but with a neural expert instead of a visual expert: https://arxiv.org/pdf/2311.03079.pdf
 
 
-TODO:
-    [ ] Finish custom training code
-        [ ] Add N % X == 1 hack
-        [ ] Checkpointing
-        [ ] Custom metrics (e.g., Accuracy on object generation)
-    [ ] Architecture Ideas
-        [ ] COGVLM style neural decoder-only model.
-        [ ] Conv layers?
-    [ ] Interp
-        [ ] On base E-D Telepath
-            [ ] Nearest-Neighbour token space tracking of encoder outputs
-        [ ] On COGVLM
-            [ ] Similarity of neural-query to target-token-key vectors.
+# TODO:
+- [ ] Finish custom training code
+    - [ ] Add N % X == 1 hack
+    - [ ] Checkpointing
+    - [ ] Custom metrics (e.g., Accuracy on object generation)
+- [ ] Architecture Ideas
+    - [ ] COGVLM style neural decoder-only model
+    - [ ] Conv layers?
+- [ ] Interp
+    - [ ] On base E-D Telepath
+        - [ ] Nearest-Neighbour token space tracking of encoder outputs
+    - [ ] On COGVLM
+        - [ ] Similarity of neural-query to target-token-key vectors.
