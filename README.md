@@ -11,7 +11,7 @@ This project exists in orbit around one fundamental question: to what extent can
 
 # TODO:
 - [ ] Finish custom training code
-    - [ ] Add N % X == 1 hack
+    - [x] Fix logging
     - [ ] Checkpointing
     - [ ] Custom metrics (e.g., Accuracy on object generation)
 - [ ] Architecture Ideas
