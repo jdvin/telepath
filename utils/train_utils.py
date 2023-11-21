@@ -10,10 +10,10 @@ import wandb
 @dataclass
 class TrainMetrics:
     train_loss: float = 0
-    val_loss: float = 0
-    microstep: int = 0
-    step: int = 0
-    epoch: int = 0
+    val_loss: float = -1
+    microstep: int = 1
+    step: int = 1
+    epoch: int = 1
     lr: float = 0
     _past: dict[str, Any] = field(default_factory=dict)
 
@@ -32,6 +32,7 @@ class TrainMetrics:
         }
 
         wandb.log(metrics)
+        self._past = metrics
 
 
 class DataLoader:

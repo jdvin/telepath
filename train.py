@@ -1,4 +1,5 @@
 import argparse
+import os
 
 from loguru import logger
 import torch
@@ -23,11 +24,11 @@ parser.add_argument("--tokenizer_path", type=str)
 parser.add_argument("--max_length", type=int)
 parser.add_argument("--num_channels", type=int)
 parser.add_argument("--num_samples", type=int)
-parser.add_argument("--device", type=str, default="mps")
+parser.add_argument("--device", type=str)
 
 NUM_EPOCHS = 5
 BATCH_SIZE = 32
-MICRO_BATCH_SIZE = 4
+MICRO_BATCH_SIZE = 32
 VALIDATION_INTERVAL = 0.1
 LOG_INTERVAL = 1
 
@@ -94,16 +95,19 @@ def main(
     )
 
     logger.info("Creating optimizer.")
-    optim, lr_scheduler = wmodel.configure_optimizers(num_batches=len(train_dataloader))
+    optim, lr_scheduler = wmodel.configure_optimizers(num_batches=len(train_dataloader) * NUM_EPOCHS)
     grad_accum_steps = BATCH_SIZE // MICRO_BATCH_SIZE
     metrics = TrainMetrics()
     metrics.lr = lr_scheduler.get_last_lr()[0]
-    logger.info("Spinning dataloader.")
+    logger.info("Spinning Dataloader.")
     micro_batch = train_dataloader.get_batch()
     logger.info("Beginning Training.")
     train_pbar = tqdm(
         total=len(train_dataloader), desc=f"Epoch {metrics.epoch}/{NUM_EPOCHS}."
     )
+    if not os.path.isdir("checkpoints"):
+        os.makedirs("checkpoints")
+
     while True:
         loss = wmodel.step(micro_batch)
         loss = loss / grad_accum_steps
@@ -113,8 +117,7 @@ def main(
         loss.backward()
 
         # If we are still accumulating gradients, then skip gradient application and logging.
-        # First term is a HACK to stop the step logic from being run on the first microstep.
-        if metrics.microstep and metrics.microstep % grad_accum_steps != 0:
+        if metrics.microstep % grad_accum_steps != 0:
             metrics.microstep += 1
             continue
 
@@ -138,19 +141,16 @@ def main(
         metrics.microstep += 1
         metrics.lr = lr_scheduler.get_last_lr()[0]
 
-        if metrics.step % len(train_dataloader) == 0:
+        if metrics.step % len(train_dataloader) == 0: 
+            torch.save(wmodel.model.state_dict(), f"checkpoints/{run_name}_model_{metrics.epoch}.pt")
             metrics.epoch += 1
             train_pbar = tqdm(
                 total=len(train_dataloader),
-                description=f"Epoch: {metrics.epoch}/{NUM_EPOCHS}.",
+                desc=f"Epoch: {metrics.epoch}/{NUM_EPOCHS}.",
             )
 
-        if metrics.epoch == NUM_EPOCHS:
+        if metrics.epoch == NUM_EPOCHS + 1:
             break
-
-    # save
-    torch.save(wmodel.model.state_dict(), f"chekpoints/{run_name}_model.pt")
-
 
 if __name__ == "__main__":
     args = parser.parse_args()
