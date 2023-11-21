@@ -23,4 +23,10 @@ This project exists in orbit around one fundamental question: to what extent can
     - [ ] On COGVLM
         - [ ] Similarity of neural-query to target-token-key vectors.
 - [ ] Optimisatons
+    - [ ] Multiple eval data loaders
     - [ ] Multi-worker dataloader.
+- [ ] Datasets
+    - [ ] Multi-subject training set
+    - [ ] Subject-held-out eval set
+    - [ ] Subject+Object-held-out eval set
+    
