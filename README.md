@@ -7,3 +7,18 @@ This project exists in orbit around one fundamental question: to what extent can
 - the GPT will intially be frozen under the assumption that finetuning it will modify its representations of the out-of-distribution validation examples such that their logits are effectively never sampled...is that true?
 - Are there more effective encoder architectures? (e.g., Meta's wave2vec2 with a pre-transformer convolution)?
     - COGVLM but with a neural expert instead of a visual expert: https://arxiv.org/pdf/2311.03079.pdf
+
+
+TODO:
+    [ ] Finish custom training code
+        [ ] Add N % X == 1 hack
+        [ ] Checkpointing
+        [ ] Custom metrics (e.g., Accuracy on object generation)
+    [ ] Architecture Ideas
+        [ ] COGVLM style neural decoder-only model.
+        [ ] Conv layers?
+    [ ] Interp
+        [ ] On base E-D Telepath
+            [ ] Nearest-Neighbour token space tracking of encoder outputs
+        [ ] On COGVLM
+            [ ] Similarity of neural-query to target-token-key vectors.
