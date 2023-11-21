@@ -22,3 +22,5 @@ This project exists in orbit around one fundamental question: to what extent can
         - [ ] Nearest-Neighbour token space tracking of encoder outputs
     - [ ] On COGVLM
         - [ ] Similarity of neural-query to target-token-key vectors.
+- [ ] Optimisatons
+    - [ ] Multi-worker dataloader.
