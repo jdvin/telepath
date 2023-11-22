@@ -5,6 +5,7 @@ import random
 
 import yaml
 import wandb
+from tqdm import tqdm
 
 
 @dataclass
@@ -32,7 +33,10 @@ class TrainMetrics:
         }
 
         wandb.log(metrics)
-        self._past = metrics
+        new_past = asdict(self)
+        new_past.pop("_past")
+
+        self._past = new_past
 
 
 class DataLoader:
@@ -75,3 +79,13 @@ def load_yaml(path: str):
     with open(path, "r") as f:
         config = yaml.safe_load(f)
     return config
+
+
+def run_eval(wmodel, val_dataloader: DataLoader, metrics: TrainMetrics):
+    metrics.val_loss = 0
+    val_pbar = tqdm(total=len(val_dataloader), desc="Running validation")
+    for micro_batch in val_dataloader:
+        val_pbar.update()
+        metrics.val_loss += wmodel.step(micro_batch).item()
+    metrics.val_loss = metrics.val_loss / len(val_dataloader)
+

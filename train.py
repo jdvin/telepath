@@ -1,5 +1,6 @@
 import argparse
 import os
+import random
 
 from loguru import logger
 import torch
@@ -8,7 +9,7 @@ from tqdm import tqdm
 import wandb
 
 from utils.data_utils import get_dataset
-from utils.train_utils import load_yaml, TrainMetrics, DataLoader
+from utils.train_utils import load_yaml, run_eval, TrainMetrics, DataLoader
 from src.wrapper import (
     TelepathWrapper,
 )
@@ -46,6 +47,7 @@ def main(
     device: str,
 ):
     torch.manual_seed(42)
+    random.seed(42)
 
     if add_transform:
         logger.info("Adding transform to dataset.")
@@ -108,6 +110,12 @@ def main(
     if not os.path.isdir("checkpoints"):
         os.makedirs("checkpoints")
 
+    assert not os.path.isdir(f"checkpoints/{run_name}")
+
+    os.makedirs(f"checkpoints/{run_name}")
+
+    run_eval(wmodel=wmodel, val_dataloader=val_dataloader, metrics=metrics)
+
     while True:
         loss = wmodel.step(micro_batch)
         loss = loss / grad_accum_steps
@@ -126,12 +134,7 @@ def main(
         lr_scheduler.step()
         train_pbar.update()
         if metrics.step % int(len(train_dataloader) * VALIDATION_INTERVAL) == 0:
-            metrics.val_loss = 0
-            val_pbar = tqdm(total=len(val_dataloader), desc="Running validation")
-            for micro_batch in val_dataloader:
-                val_pbar.update()
-                metrics.val_loss += wmodel.step(micro_batch).item()
-            metrics.val_loss = metrics.val_loss / len(val_dataloader)
+           run_eval(wmodel=wmodel, val_dataloader=val_dataloader, metrics=metrics)
 
         if metrics.step % LOG_INTERVAL == 0:
             metrics.log()
@@ -142,7 +145,7 @@ def main(
         metrics.lr = lr_scheduler.get_last_lr()[0]
 
         if metrics.step % len(train_dataloader) == 0: 
-            torch.save(wmodel.model.state_dict(), f"checkpoints/{run_name}_model_{metrics.epoch}.pt")
+            torch.save(wmodel.model.state_dict(), f"checkpoints/{run_name}/model_ep{metrics.epoch}.pt")
             metrics.epoch += 1
             train_pbar = tqdm(
                 total=len(train_dataloader),
