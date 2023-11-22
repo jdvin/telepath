@@ -11,6 +11,6 @@ encoder_bias: true
 encoder_dropout: 0.1
 pretrained_gpt: gpt2
 freeze_gpt: true
-gpt_start_token: 50257
+gpt_start_token: 3784
 gpt_stop_token: 50256
 gpt_block_size: 110

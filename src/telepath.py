@@ -26,7 +26,7 @@ class TelepathConfig:
 
     pretrained_gpt: GPT | None = None
     freeze_gpt: bool = True
-    gpt_start_token: int = 50257
+    gpt_start_token: int = 3784
     gpt_stop_token: int = 50256
     gpt_n_heads: int = 12
     gpt_d_model: int = 768
