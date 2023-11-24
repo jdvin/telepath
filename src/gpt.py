@@ -120,20 +120,45 @@ class GPT(nn.Module):
         concat_embed: torch.Tensor,
         max_length: int = 10,
         stop_token: int = 50256,
-    ) -> torch.Tensor:
+    ) -> list[list[int]]:
         """Generate a sequence of tokens using argmax sampling.
+
+        Pops generations off the inference stack as they complete.
         Attributes:
             input_ids: Input token ids of shape (batch_size, n_tokens).
             concat_embed: Concatenated embeddings of shape (batch_size, k, d_model).
             max_length: Maximum length of the generated sequence.
             stop_token: Token id of the stop token.
         """
+        # import pdb
+        # pdb.set_trace()
+        batch_size = input_ids.size(0) if len(input_ids.size()) == 2 else 1
+        # Preallocate generations so that we can save them by order.
+        generations = [[] for _ in range(batch_size)]
+        # Used to track the indexes of the running generations.
+        batch_indexes = list(range(batch_size))
         for _ in range(max_length):
+
             logits = self.forward(input_ids, concat_embed, inference=True)
             input_ids = torch.cat([input_ids, logits.argmax(dim=-1)], dim=1)
-            if (input_ids == stop_token).any():
+            # Get the index of every generation that has generated the stop token.
+            stop_indexes = (input_ids[:, -1] == stop_token).nonzero(as_tuple=True)[0].tolist()
+            # Remove the running generations that have generated the stop token.
+            for i in stop_indexes:
+                # Get the batch position of the current generation.
+                batch_index = batch_indexes[i]
+                # Map from current relative index to batch index.
+                generations[batch_index] = input_ids[i, :].tolist()
+                # Remove the complete generation to avoid unnecessary flops.
+                batch_indexes.pop(batch_index)
+                input_ids = torch.cat([input_ids[:i, :], input_ids[i + 1 :, :]], dim=0)
+                concat_embed = torch.cat([concat_embed[:i, :, :], concat_embed[i + 1 :, :, :]], dim=0)
+            if len(batch_indexes) == 0:
                 break
-        return input_ids
+        # If there are still running generations, add them to the list.
+        for i in batch_indexes:
+            generations[i] = input_ids[i, :].tolist()
+        return generations
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary

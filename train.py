@@ -86,7 +86,6 @@ def main(
         "model": load_yaml(model_config_path),
         "optim": load_yaml(model_config_path),
     }
-    wandb.init(project="telepath", name=run_name, config=config)
     logger.info("Creating data loaders.")
     # Create data loaders.
     train_dataloader = DataLoader(
@@ -103,6 +102,8 @@ def main(
     metrics.lr = lr_scheduler.get_last_lr()[0]
     logger.info("Spinning Dataloader.")
     micro_batch = train_dataloader.get_batch()
+    generations = wmodel.model.generate(micro_batch["eeg"].to(device), device=device)
+    import pdb; pdb.set_trace()
     logger.info("Beginning Training.")
     train_pbar = tqdm(
         total=len(train_dataloader), desc=f"Epoch {metrics.epoch}/{NUM_EPOCHS}."
@@ -115,7 +116,8 @@ def main(
     os.makedirs(f"checkpoints/{run_name}")
 
     run_eval(wmodel=wmodel, val_dataloader=val_dataloader, metrics=metrics)
-
+    
+    wandb.init(project="telepath", name=run_name, config=config)
     while True:
         loss = wmodel.step(micro_batch)
         loss = loss / grad_accum_steps
@@ -145,7 +147,7 @@ def main(
         metrics.lr = lr_scheduler.get_last_lr()[0]
 
         if metrics.step % len(train_dataloader) == 0: 
-            torch.save(wmodel.model.state_dict(), f"checkpoints/{run_name}/model_ep{metrics.epoch}.pt")
+            torch.save(wmodel.model.state_dict(), f"checkpoints/{run_name}/telepath_ep{metrics.epoch}.pt")
             metrics.epoch += 1
             train_pbar = tqdm(
                 total=len(train_dataloader),

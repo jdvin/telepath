@@ -12,7 +12,7 @@ This project exists in orbit around one fundamental question: to what extent can
 # TODO:
 - [ ] Finish custom training code
     - [x] Fix logging
-    - [ ] Checkpointing
+    - [x] Checkpointing
     - [ ] Custom metrics (e.g., Accuracy on object generation)
 - [ ] Architecture Ideas
     - [ ] COGVLM style neural decoder-only model
@@ -23,6 +23,8 @@ This project exists in orbit around one fundamental question: to what extent can
     - [ ] On COGVLM
         - [ ] Similarity of neural-query to target-token-key vectors.
 - [ ] Optimisatons
+    - [x] Batch generate.
+    - [ ] Half precision training.
     - [ ] Multiple eval data loaders
     - [ ] Multi-worker dataloader.
 - [ ] Datasets

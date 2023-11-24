@@ -6,12 +6,14 @@ import random
 import yaml
 import wandb
 from tqdm import tqdm
+import torch
 
 
 @dataclass
 class TrainMetrics:
     train_loss: float = 0
     val_loss: float = -1
+    val_accuracy = -1
     microstep: int = 1
     step: int = 1
     epoch: int = 1
@@ -61,6 +63,7 @@ class DataLoader:
         self.i += 1
 
         for key, value in batch.items():
+            # TODO: This loop pattern probably stops us from being able to take advantage of the non-blocking device movement.
             if "cuda" in self.device:
                 batch[key] = value.pin_memory().to(self.device, non_blocking=True)
             else:
@@ -80,7 +83,7 @@ def load_yaml(path: str):
         config = yaml.safe_load(f)
     return config
 
-
+@torch.no_grad()
 def run_eval(wmodel, val_dataloader: DataLoader, metrics: TrainMetrics):
     metrics.val_loss = 0
     val_pbar = tqdm(total=len(val_dataloader), desc="Running validation")

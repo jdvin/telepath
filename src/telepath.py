@@ -180,17 +180,20 @@ class Telepath(nn.Module):
         return self.decoder.forward(input_ids, concat_embed=enc)
 
     @torch.no_grad()
-    def generate(self, eeg: torch.Tensor, stop_token: int) -> torch.Tensor:
+    def generate(self, eeg: torch.Tensor, device: str, stop_token: int | None = None) -> list[list[int]]:
         """Generate a sequence of tokens given an EEG signal.
         Attributes:
             eeg_signal: EEG signal of shape (batch_size, n_samples, n_channels).
             stop_token: Token id to stop generation at.
         """
+        assert len(eeg.size()) == 3 
+        batch_size = eeg.size(0)
+        eeg = eeg.to(device)
         enc = self.pre_norm(eeg)
         enc = self.encoder_proj(enc)
         enc = self.encoder(enc)
         return self.decoder.generate(
-            input_ids=torch.tensor(self.start_token),
+            input_ids=torch.full((batch_size, 1), self.start_token).to(device),
             concat_embed=enc,
-            stop_token=self.stop_token,
+            stop_token=stop_token or self.stop_token,
         )
