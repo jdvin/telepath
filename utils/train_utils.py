@@ -8,12 +8,14 @@ import wandb
 from tqdm import tqdm
 import torch
 
+from src.wrapper import TelepathWrapper
+
 
 @dataclass
 class TrainMetrics:
     train_loss: float = 0
     val_loss: float = -1
-    val_accuracy = -1
+    val_accuracy: float = -1
     microstep: int = 1
     step: int = 1
     epoch: int = 1
@@ -84,11 +86,30 @@ def load_yaml(path: str):
     return config
 
 @torch.no_grad()
-def run_eval(wmodel, val_dataloader: DataLoader, metrics: TrainMetrics):
+def get_accuracy(batch: dict[str, torch.Tensor], wmodel: TelepathWrapper) -> float:
+    """Naiive accuracy calculation.
+
+    Does not take into account the fact that the model may have predicted a synonym of the correct word.
+    """
+
+    pred_tokens: list[list[int]] = wmodel.model.generate(batch["eeg"], wmodel.device)
+    assert len(pred_tokens) == len(batch["input_ids"])
+    accuracy = 0
+    for pred, true in zip(pred_tokens, batch["input_ids"]):
+        # True values are padded for training.
+        if pred == true[:len(pred)]:
+            accuracy += 1 / len(pred_tokens)
+    return accuracy
+    
+
+
+@torch.no_grad()
+def run_eval(wmodel: TelepathWrapper, val_dataloader: DataLoader, metrics: TrainMetrics):
     metrics.val_loss = 0
+    metrics.val_accuracy = 0
     val_pbar = tqdm(total=len(val_dataloader), desc="Running validation")
-    for micro_batch in val_dataloader:
+    for k, micro_batch in enumerate(val_dataloader):
+        metrics.val_loss += wmodel.step(micro_batch).item() / len(val_dataloader)
+        metrics.val_accuracy += get_accuracy(micro_batch, wmodel) / len(val_dataloader)
         val_pbar.update()
-        metrics.val_loss += wmodel.step(micro_batch).item()
-    metrics.val_loss = metrics.val_loss / len(val_dataloader)
 

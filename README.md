@@ -5,17 +5,18 @@ This project exists in orbit around one fundamental question: to what extent can
 - How well does the model trained on the EEG data taken during the viewing of a set of objects generalise to the EEG data from an unseen set?
 - How much do the EEG samples taken before or after the object was being viewed impact the accuracy of the model?
 - the GPT will intially be frozen under the assumption that finetuning it will modify its representations of the out-of-distribution validation examples such that their logits are effectively never sampled...is that true?
-- Are there more effective encoder architectures? (e.g., Meta's wave2vec2 with a pre-transformer convolution)?
-    - COGVLM but with a neural expert instead of a visual expert: https://arxiv.org/pdf/2311.03079.pdf
-
+- Are there more effective architectures? 
 
 # TODO:
 - [ ] Finish custom training code
     - [x] Fix logging
     - [x] Checkpointing
-    - [ ] Custom metrics (e.g., Accuracy on object generation)
+    - [ ] Custom metrics
+        - [ ] Naiive accuracy on object generation.
+        - [ ] Flexible accruracy (Capitalisations, synonyms)
+        - [ ] Semantic Similarity on object generations
 - [ ] Architecture Ideas
-    - [ ] COGVLM style neural decoder-only model
+    - [ ] COGVLM style neural decoder-only model: https://arxiv.org/pdf/2311.03079.pdf
     - [ ] Conv layers?
 - [ ] Interp
     - [ ] On base E-D Telepath
@@ -24,6 +25,7 @@ This project exists in orbit around one fundamental question: to what extent can
         - [ ] Similarity of neural-query to target-token-key vectors.
 - [ ] Optimisatons
     - [x] Batch generate.
+    - [ ] KV Cache.
     - [ ] Half precision training.
     - [ ] Multiple eval data loaders
     - [ ] Multi-worker dataloader.

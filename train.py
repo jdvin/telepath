@@ -102,8 +102,6 @@ def main(
     metrics.lr = lr_scheduler.get_last_lr()[0]
     logger.info("Spinning Dataloader.")
     micro_batch = train_dataloader.get_batch()
-    generations = wmodel.model.generate(micro_batch["eeg"].to(device), device=device)
-    import pdb; pdb.set_trace()
     logger.info("Beginning Training.")
     train_pbar = tqdm(
         total=len(train_dataloader), desc=f"Epoch {metrics.epoch}/{NUM_EPOCHS}."

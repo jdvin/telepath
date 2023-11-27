@@ -67,7 +67,7 @@ class TelepathWrapper:
         self.config = TelepathConfig.from_yaml(model_config_path)
         self.model = Telepath(self.config).to(device)
         self.optimizer_config = OptimizerConfig.from_yaml(optimizer_config_path)
-
+        self.device = device
         if self.config.freeze_gpt:
             for param in self.model.decoder.parameters():
                 param.requires_grad = False
