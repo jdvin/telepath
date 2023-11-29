@@ -3,6 +3,7 @@ from typing import Any
 
 import torch
 from torch.nn import functional as F
+from transformers import AutoTokenizer
 import yaml
 
 from .telepath import Telepath, TelepathConfig
@@ -68,6 +69,7 @@ class TelepathWrapper:
         self.model = Telepath(self.config).to(device)
         self.optimizer_config = OptimizerConfig.from_yaml(optimizer_config_path)
         self.device = device
+        self.tokenizer = AutoTokenizer.from_pretrained(self.config.tokenizer_path)
         if self.config.freeze_gpt:
             for param in self.model.decoder.parameters():
                 param.requires_grad = False

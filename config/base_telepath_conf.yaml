@@ -9,6 +9,7 @@ encoder_n_heads: 6
 encoder_n_layers: 6
 encoder_bias: true
 encoder_dropout: 0.1
+tokenizer_path: gpt2
 pretrained_gpt: gpt2
 freeze_gpt: true
 gpt_start_token: 3784

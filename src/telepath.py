@@ -24,6 +24,7 @@ class TelepathConfig:
     encoder_bias: bool
     encoder_dropout: float
 
+    tokenizer_path: str
     pretrained_gpt: GPT | None = None
     freeze_gpt: bool = True
     gpt_start_token: int = 3784
@@ -180,13 +181,15 @@ class Telepath(nn.Module):
         return self.decoder.forward(input_ids, concat_embed=enc)
 
     @torch.no_grad()
-    def generate(self, eeg: torch.Tensor, device: str, stop_token: int | None = None) -> list[list[int]]:
+    def generate(
+        self, eeg: torch.Tensor, device: str, stop_token: int | None = None
+    ) -> list[list[int]]:
         """Generate a sequence of tokens given an EEG signal.
         Attributes:
             eeg_signal: EEG signal of shape (batch_size, n_samples, n_channels).
             stop_token: Token id to stop generation at.
         """
-        assert len(eeg.size()) == 3 
+        assert len(eeg.size()) == 3
         batch_size = eeg.size(0)
         eeg = eeg.to(device)
         enc = self.pre_norm(eeg)

@@ -20,6 +20,7 @@ class TrainMetrics:
     step: int = 1
     epoch: int = 1
     lr: float = 0
+    generations = wandb.Table(columns=["target", "output"])
     _past: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -85,31 +86,42 @@ def load_yaml(path: str):
         config = yaml.safe_load(f)
     return config
 
+
 @torch.no_grad()
-def get_accuracy(batch: dict[str, torch.Tensor], wmodel: TelepathWrapper) -> float:
+def get_accuracy(
+    batch: dict[str, torch.Tensor], wmodel: TelepathWrapper, metrics: TrainMetrics
+) -> float:
     """Naiive accuracy calculation.
 
     Does not take into account the fact that the model may have predicted a synonym of the correct word.
     """
 
     pred_tokens: list[list[int]] = wmodel.model.generate(batch["eeg"], wmodel.device)
+    pred_text = wmodel.tokenizer.batch_decode(pred_tokens, skip_special_tokens=True)
+    true_text = wmodel.tokenizer.batch_decode(
+        batch["input_ids"], skip_special_tokens=True
+    )
+    for pred, true in zip(pred_text, true_text):
+        metrics.generations.add_data(true, pred)
     assert len(pred_tokens) == len(batch["input_ids"])
     accuracy = 0
     for pred, true in zip(pred_tokens, batch["input_ids"]):
         # True values are padded for training.
-        if pred == true[:len(pred)]:
+        if pred == true[: len(pred)]:
             accuracy += 1 / len(pred_tokens)
     return accuracy
-    
 
 
 @torch.no_grad()
-def run_eval(wmodel: TelepathWrapper, val_dataloader: DataLoader, metrics: TrainMetrics):
+def run_eval(
+    wmodel: TelepathWrapper, val_dataloader: DataLoader, metrics: TrainMetrics
+):
     metrics.val_loss = 0
     metrics.val_accuracy = 0
     val_pbar = tqdm(total=len(val_dataloader), desc="Running validation")
     for k, micro_batch in enumerate(val_dataloader):
         metrics.val_loss += wmodel.step(micro_batch).item() / len(val_dataloader)
-        metrics.val_accuracy += get_accuracy(micro_batch, wmodel) / len(val_dataloader)
+        metrics.val_accuracy += get_accuracy(micro_batch, wmodel, metrics) / len(
+            val_dataloader
+        )
         val_pbar.update()
-

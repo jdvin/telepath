@@ -1,13 +1,12 @@
 import argparse
 import enum
 import random
+from typing import Callable, Any
 
 import datasets
 import pandas as pd
-import transformers
 import torch
-
-from typing import Callable, Any
+from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
 
 
 class ValidationType(enum.Enum):
@@ -28,7 +27,7 @@ parser.add_argument("--output_path", type=str)
 
 
 def get_transform(
-    tokenizer: transformers.PreTrainedTokenizer,
+    tokenizer: PreTrainedTokenizer,
     start_token_id: int,
     stop_token_id: int,
     pad_token_id: int,
@@ -78,7 +77,7 @@ def create_dataset(
     datafiles: list[str],
     validation_type: ValidationType,
     pre_transform: bool = False,
-    tokenizer: transformers.PreTrainedTokenizer | None = None,
+    tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast | None = None,
     max_length: int | None = None,
     num_channels: int | None = None,
     num_samples: int | None = None,
@@ -138,8 +137,8 @@ def create_dataset(
 def get_dataset(
     path: str,
     add_transform: bool = True,
-    tokenizer: transformers.PreTrainedTokenizer | None = None,
-    start_token_id: int | None = None,
+    tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast | None = None,
+    strt_token_id: int | None = None,
     stop_token_id: int | None = None,
     pad_token_id: int | None = None,
     max_length: int | None = None,
