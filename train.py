@@ -118,37 +118,37 @@ def main(
     while True:
         loss = wmodel.step(micro_batch)
         loss = loss / grad_accum_steps
-        metrics.train_loss += loss.item()
+        metrics.train_loss.value += loss.item()
         # Get the batch straight away without blocking whilst we compute the backward pass.
         micro_batch = train_dataloader.get_batch()
         loss.backward()
 
         # If we are still accumulating gradients, then skip gradient application and logging.
-        if metrics.microstep % grad_accum_steps != 0:
-            metrics.microstep += 1
+        if metrics.microstep.value % grad_accum_steps != 0:
+            metrics.microstep.value += 1
             continue
 
         optim.step()
         optim.zero_grad(set_to_none=True)
         lr_scheduler.step()
         train_pbar.update()
-        if metrics.step % int(len(train_dataloader) * VALIDATION_INTERVAL) == 0:
+        if metrics.step.value % int(len(train_dataloader) * VALIDATION_INTERVAL) == 0:
             run_eval(wmodel=wmodel, val_dataloader=val_dataloader, metrics=metrics)
 
-        if metrics.step % LOG_INTERVAL == 0:
+        if metrics.step.value % LOG_INTERVAL == 0:
             metrics.log()
 
-        metrics.train_loss = 0
-        metrics.step += 1
-        metrics.microstep += 1
+        metrics.train_loss.value = 0
+        metrics.step.value += 1
+        metrics.microstep.value += 1
         metrics.lr = lr_scheduler.get_last_lr()[0]
 
-        if metrics.step % len(train_dataloader) == 0:
+        if metrics.step.value % len(train_dataloader) == 0:
             torch.save(
                 wmodel.model.state_dict(),
                 f"checkpoints/{run_name}/telepath_ep{metrics.epoch}.pt",
             )
-            metrics.epoch += 1
+            metrics.epoch.value += 1
             train_pbar = tqdm(
                 total=len(train_dataloader),
                 desc=f"Epoch: {metrics.epoch}/{NUM_EPOCHS}.",

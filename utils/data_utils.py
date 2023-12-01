@@ -138,7 +138,7 @@ def get_dataset(
     path: str,
     add_transform: bool = True,
     tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast | None = None,
-    strt_token_id: int | None = None,
+    start_token_id: int | None = None,
     stop_token_id: int | None = None,
     pad_token_id: int | None = None,
     max_length: int | None = None,

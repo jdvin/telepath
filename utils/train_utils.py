@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field, asdict
+from enum import Enum
 import math
 from typing import Any
 import random
@@ -11,37 +12,51 @@ import torch
 from src.wrapper import TelepathWrapper
 
 
+class MetricLogRule(Enum):
+    EVERY_STEP = "every_step"
+    ON_CHANGE = "on_change"
+    MANUAL = "manual"
+
+
+@dataclass
+class Metric:
+    """I'm in the arena, trying things."""
+
+    value: Any
+    _update_rule: MetricLogRule
+    _log: bool = False
+    _past: Any | None = None
+
+
 @dataclass
 class TrainMetrics:
-    train_loss: float = 0
-    val_loss: float = -1
-    val_accuracy: float = -1
-    microstep: int = 1
-    step: int = 1
-    epoch: int = 1
-    lr: float = 0
-    generations = wandb.Table(columns=["target", "output"])
-    _past: dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self):
-        self._past = {key: -1 for key in asdict(self).keys()}
+    train_loss = Metric(0, MetricLogRule.EVERY_STEP)
+    val_loss = Metric(-1, MetricLogRule.ON_CHANGE)
+    microstep = Metric(1, MetricLogRule.EVERY_STEP)
+    step = Metric(1, MetricLogRule.EVERY_STEP)
+    epoch = Metric(1, MetricLogRule.EVERY_STEP)
+    lr = Metric(0, MetricLogRule.EVERY_STEP)
+    generations = Metric(
+        wandb.Table(columns=["target", "output"]), MetricLogRule.MANUAL
+    )
 
     def log(self):
-        metrics = asdict(self)
-        metrics.pop("_past")
-        # Only log values that have changed.
-        # TODO: Check if this is necessary.
-        metrics = {
-            key.replace("_", "/"): value
-            for key, value in metrics.items()
-            if self._past[key] != value
-        }
+        log_metrics = {}
+        for key, metric in asdict(self).items():
+            if (
+                metric._update_rule == MetricLogRule.EVERY_STEP
+                or (
+                    metric.update_rule == MetricLogRule.ON_CHANGE
+                    and metric.value != metric._past[key]
+                )
+                or (metric.update_rule == MetricLogRule.MANUAL and metric._log)
+            ):
+                metric._log = False
+                metric._past = metric.value
+                key = key.replace("_", "/")
+                log_metrics[key] = metric.value
 
-        wandb.log(metrics)
-        new_past = asdict(self)
-        new_past.pop("_past")
-
-        self._past = new_past
+        wandb.log(log_metrics)
 
 
 class DataLoader:
