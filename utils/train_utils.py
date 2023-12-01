@@ -32,6 +32,7 @@ class Metric:
 class TrainMetrics:
     train_loss = Metric(0, MetricLogRule.EVERY_STEP)
     val_loss = Metric(-1, MetricLogRule.ON_CHANGE)
+    val_accuracy = Metric(-1, MetricLogRule.ON_CHANGE)
     microstep = Metric(1, MetricLogRule.EVERY_STEP)
     step = Metric(1, MetricLogRule.EVERY_STEP)
     epoch = Metric(1, MetricLogRule.EVERY_STEP)
@@ -117,7 +118,7 @@ def get_accuracy(
         batch["input_ids"], skip_special_tokens=True
     )
     for pred, true in zip(pred_text, true_text):
-        metrics.generations.add_data(true, pred)
+        metrics.generations.value.add_data(true, pred)
     assert len(pred_tokens) == len(batch["input_ids"])
     accuracy = 0
     for pred, true in zip(pred_tokens, batch["input_ids"]):
@@ -131,12 +132,13 @@ def get_accuracy(
 def run_eval(
     wmodel: TelepathWrapper, val_dataloader: DataLoader, metrics: TrainMetrics
 ):
-    metrics.val_loss = 0
-    metrics.val_accuracy = 0
+    metrics.val_loss.value = 0
+    metrics.val_accuracy.value = 0
     val_pbar = tqdm(total=len(val_dataloader), desc="Running validation")
     for k, micro_batch in enumerate(val_dataloader):
-        metrics.val_loss += wmodel.step(micro_batch).item() / len(val_dataloader)
-        metrics.val_accuracy += get_accuracy(micro_batch, wmodel, metrics) / len(
+        metrics.val_loss.value += wmodel.step(micro_batch).item() / len(val_dataloader)
+        metrics.val_accuracy.value += get_accuracy(micro_batch, wmodel, metrics) / len(
             val_dataloader
         )
         val_pbar.update()
+    metrics.generations._log = True
