@@ -138,7 +138,6 @@ def main(
         if metrics.step.value % LOG_INTERVAL == 0:
             metrics.log()
 
-        metrics.train_loss.value = 0
         metrics.step.value += 1
         metrics.microstep.value += 1
         metrics.lr = lr_scheduler.get_last_lr()[0]

@@ -26,19 +26,25 @@ class Metric:
     _update_rule: MetricLogRule
     _log: bool = False
     _past: Any | None = None
+    reset: bool = False
+    _reset_value: Any | None = None
+
+    def __post_init__(self):
+        if self.reset:
+            self._reset_value = self.value
 
 
 @dataclass
 class TrainMetrics:
-    train_loss = Metric(0, MetricLogRule.EVERY_STEP)
-    val_loss = Metric(-1, MetricLogRule.ON_CHANGE)
-    val_accuracy = Metric(-1, MetricLogRule.ON_CHANGE)
+    train_loss = Metric(0, MetricLogRule.EVERY_STEP, reset=True)
+    val_loss = Metric(0, MetricLogRule.MANUAL, reset=True)
+    val_accuracy = Metric(0, MetricLogRule.MANUAL, reset=True)
     microstep = Metric(1, MetricLogRule.EVERY_STEP)
     step = Metric(1, MetricLogRule.EVERY_STEP)
     epoch = Metric(1, MetricLogRule.EVERY_STEP)
     lr = Metric(0, MetricLogRule.EVERY_STEP)
     generations = Metric(
-        wandb.Table(columns=["target", "output"]), MetricLogRule.MANUAL
+        wandb.Table(columns=["target", "output"]), MetricLogRule.MANUAL, reset=True
     )
 
     def log(self):
@@ -56,6 +62,8 @@ class TrainMetrics:
                 metric._past = metric.value
                 key = key.replace("_", "/")
                 log_metrics[key] = metric.value
+                if metric._reset is not None:
+                    metric.value = metric._reset_value
 
         wandb.log(log_metrics)
 
@@ -141,4 +149,6 @@ def run_eval(
             val_dataloader
         )
         val_pbar.update()
+    metrics.val_loss._log = True
+    metrics.val_accuracy._log = True
     metrics.generations._log = True
