@@ -27,7 +27,7 @@ parser.add_argument("--output_path", type=str)
 
 
 def get_transform(
-    tokenizer: PreTrainedTokenizer,
+    tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast,
     start_token_id: int,
     stop_token_id: int,
     pad_token_id: int,
@@ -78,6 +78,9 @@ def create_dataset(
     validation_type: ValidationType,
     pre_transform: bool = False,
     tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast | None = None,
+    start_token_id: int | None = None,
+    stop_token_id: int | None = None,
+    pad_token_id: int | None = None,
     max_length: int | None = None,
     num_channels: int | None = None,
     num_samples: int | None = None,
@@ -121,11 +124,22 @@ def create_dataset(
     assert isinstance(dataset_splits, datasets.DatasetDict)  # type: ignore
     if pre_transform:
         assert tokenizer is not None
+        assert start_token_id is not None
+        assert stop_token_id is not None
+        assert pad_token_id is not None
         assert max_length is not None
         assert num_channels is not None
         assert num_samples is not None
         dataset_splits = dataset_splits.map(
-            get_transform(tokenizer, max_length, num_channels, num_samples),
+            get_transform(
+                tokenizer,
+                start_token_id=start_token_id,
+                stop_token_id=stop_token_id,
+                pad_token_id=pad_token_id,
+                max_length=max_length,
+                num_channels=num_channels,
+                num_samples=num_samples,
+            ),
             batched=True,
             batch_size=None,
             remove_columns=["object"],

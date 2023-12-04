@@ -34,38 +34,25 @@ class Metric:
             self._reset_value = self.value
 
 
-@dataclass
-class TrainMetrics:
-    train_loss = Metric(0, MetricLogRule.EVERY_STEP, reset=True)
-    val_loss = Metric(0, MetricLogRule.MANUAL, reset=True)
-    val_accuracy = Metric(0, MetricLogRule.MANUAL, reset=True)
-    microstep = Metric(1, MetricLogRule.EVERY_STEP)
-    step = Metric(1, MetricLogRule.EVERY_STEP)
-    epoch = Metric(1, MetricLogRule.EVERY_STEP)
-    lr = Metric(0, MetricLogRule.EVERY_STEP)
-    generations = Metric(
-        wandb.Table(columns=["target", "output"]), MetricLogRule.MANUAL, reset=True
-    )
+def log_metrics(metrics: dict[str, Metric]):
+    log_metrics = {}
+    for key, metric in metrics.items():
+        if (
+            metric._update_rule == MetricLogRule.EVERY_STEP
+            or (
+                metric._update_rule == MetricLogRule.ON_CHANGE
+                and metric.value != metric._past
+            )
+            or (metric._update_rule == MetricLogRule.MANUAL and metric._log)
+        ):
+            metric._log = False
+            metric._past = metric.value
+            key = key.replace("_", "/")
+            log_metrics[key] = metric.value
+            if metric.reset:
+                metric.value = metric._reset_value
 
-    def log(self):
-        log_metrics = {}
-        for key, metric in asdict(self).items():
-            if (
-                metric._update_rule == MetricLogRule.EVERY_STEP
-                or (
-                    metric.update_rule == MetricLogRule.ON_CHANGE
-                    and metric.value != metric._past[key]
-                )
-                or (metric.update_rule == MetricLogRule.MANUAL and metric._log)
-            ):
-                metric._log = False
-                metric._past = metric.value
-                key = key.replace("_", "/")
-                log_metrics[key] = metric.value
-                if metric._reset is not None:
-                    metric.value = metric._reset_value
-
-        wandb.log(log_metrics)
+    wandb.log(log_metrics)
 
 
 class DataLoader:
@@ -113,7 +100,7 @@ def load_yaml(path: str):
 
 @torch.no_grad()
 def get_accuracy(
-    batch: dict[str, torch.Tensor], wmodel: TelepathWrapper, metrics: TrainMetrics
+    batch: dict[str, torch.Tensor], wmodel: TelepathWrapper, metrics: dict[str, Metric]
 ) -> float:
     """Naiive accuracy calculation.
 
@@ -126,7 +113,7 @@ def get_accuracy(
         batch["input_ids"], skip_special_tokens=True
     )
     for pred, true in zip(pred_text, true_text):
-        metrics.generations.value.add_data(true, pred)
+        metrics["generations"].value.add_data(true, pred)
     assert len(pred_tokens) == len(batch["input_ids"])
     accuracy = 0
     for pred, true in zip(pred_tokens, batch["input_ids"]):
@@ -138,17 +125,19 @@ def get_accuracy(
 
 @torch.no_grad()
 def run_eval(
-    wmodel: TelepathWrapper, val_dataloader: DataLoader, metrics: TrainMetrics
+    wmodel: TelepathWrapper, val_dataloader: DataLoader, metrics: dict[str, Metric]
 ):
-    metrics.val_loss.value = 0
-    metrics.val_accuracy.value = 0
+    metrics["val_loss"].value = 0
+    metrics["val_accuracy"].value = 0
     val_pbar = tqdm(total=len(val_dataloader), desc="Running validation")
     for k, micro_batch in enumerate(val_dataloader):
-        metrics.val_loss.value += wmodel.step(micro_batch).item() / len(val_dataloader)
-        metrics.val_accuracy.value += get_accuracy(micro_batch, wmodel, metrics) / len(
+        metrics["val_loss"].value += wmodel.step(micro_batch).item() / len(
             val_dataloader
         )
+        metrics["val_accuracy"].value += get_accuracy(
+            micro_batch, wmodel, metrics
+        ) / len(val_dataloader)
         val_pbar.update()
-    metrics.val_loss._log = True
-    metrics.val_accuracy._log = True
-    metrics.generations._log = True
+    metrics["val_loss"]._log = True
+    metrics["val_accuracy"]._log = True
+    metrics["generations"]._log = True

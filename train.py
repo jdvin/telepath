@@ -9,7 +9,14 @@ from tqdm import tqdm
 import wandb
 
 from utils.data_utils import get_dataset
-from utils.train_utils import load_yaml, run_eval, TrainMetrics, DataLoader
+from utils.train_utils import (
+    load_yaml,
+    run_eval,
+    Metric,
+    MetricLogRule,
+    log_metrics,
+    DataLoader,
+)
 from src.wrapper import (
     TelepathWrapper,
 )
@@ -97,63 +104,78 @@ def main(
         num_batches=len(train_dataloader) * NUM_EPOCHS
     )
     grad_accum_steps = BATCH_SIZE // MICRO_BATCH_SIZE
-    metrics = TrainMetrics()
-    metrics.lr = lr_scheduler.get_last_lr()[0]
+    metrics = dict(
+        train_loss=Metric(0, MetricLogRule.EVERY_STEP, reset=True),
+        val_loss=Metric(0, MetricLogRule.MANUAL, reset=True),
+        val_accuracy=Metric(0, MetricLogRule.MANUAL, reset=True),
+        microstep=Metric(1, MetricLogRule.EVERY_STEP),
+        step=Metric(1, MetricLogRule.EVERY_STEP),
+        lr=Metric(0, MetricLogRule.EVERY_STEP),
+        epoch=Metric(1, MetricLogRule.EVERY_STEP),
+        generations=Metric(
+            wandb.Table(columns=["target", "output"]),
+            MetricLogRule.MANUAL,
+            reset=True,
+        ),
+    )
+    metrics["lr"].value = lr_scheduler.get_last_lr()[0]
     logger.info("Spinning Dataloader.")
     micro_batch = train_dataloader.get_batch()
     logger.info("Beginning Training.")
     train_pbar = tqdm(
-        total=len(train_dataloader), desc=f"Epoch {metrics.epoch}/{NUM_EPOCHS}."
+        total=len(train_dataloader),
+        desc=f"Epoch {metrics['epoch'].value}/{NUM_EPOCHS}.",
     )
     if not os.path.isdir("checkpoints"):
         os.makedirs("checkpoints")
 
     assert not os.path.isdir(f"checkpoints/{run_name}")
-
     os.makedirs(f"checkpoints/{run_name}")
 
-    run_eval(wmodel=wmodel, val_dataloader=val_dataloader, metrics=metrics)
+    # run_eval(wmodel=wmodel, val_dataloader=val_dataloader, metrics=metrics)
 
     wandb.init(project="telepath", name=run_name, config=config)
     while True:
         loss = wmodel.step(micro_batch)
         loss = loss / grad_accum_steps
-        metrics.train_loss.value += loss.item()
+        metrics["train_loss"].value += loss.item()
         # Get the batch straight away without blocking whilst we compute the backward pass.
         micro_batch = train_dataloader.get_batch()
         loss.backward()
 
         # If we are still accumulating gradients, then skip gradient application and logging.
-        if metrics.microstep.value % grad_accum_steps != 0:
-            metrics.microstep.value += 1
+        if metrics["microstep"].value % grad_accum_steps != 0:
+            metrics["microstep"].value += 1
             continue
 
         optim.step()
         optim.zero_grad(set_to_none=True)
         lr_scheduler.step()
         train_pbar.update()
-        if metrics.step.value % int(len(train_dataloader) * VALIDATION_INTERVAL) == 0:
+        if (
+            metrics["step"].value % int(len(train_dataloader) * VALIDATION_INTERVAL)
+            == 0
+        ):
             run_eval(wmodel=wmodel, val_dataloader=val_dataloader, metrics=metrics)
+        if metrics["step"].value % LOG_INTERVAL == 0:
+            log_metrics(metrics)
 
-        if metrics.step.value % LOG_INTERVAL == 0:
-            metrics.log()
+        metrics["step"].value += 1
+        metrics["microstep"].value += 1
+        metrics["lr"].value = lr_scheduler.get_last_lr()[0]
 
-        metrics.step.value += 1
-        metrics.microstep.value += 1
-        metrics.lr = lr_scheduler.get_last_lr()[0]
-
-        if metrics.step.value % len(train_dataloader) == 0:
+        if metrics["step"].value % len(train_dataloader) == 0:
             torch.save(
                 wmodel.model.state_dict(),
-                f"checkpoints/{run_name}/telepath_ep{metrics.epoch}.pt",
+                f"checkpoints/{run_name}/telepath_ep{metrics['epoch'].value}.pt",
             )
-            metrics.epoch.value += 1
+            metrics["epoch"].value += 1
             train_pbar = tqdm(
                 total=len(train_dataloader),
-                desc=f"Epoch: {metrics.epoch}/{NUM_EPOCHS}.",
+                desc=f"Epoch: {metrics['epoch'].value}/{NUM_EPOCHS}.",
             )
 
-        if metrics.epoch == NUM_EPOCHS + 1:
+        if metrics["epoch"].value == NUM_EPOCHS + 1:
             break
 
 

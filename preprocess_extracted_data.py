@@ -53,6 +53,7 @@ ELECTRODES = [
     "FT7",
     "FC3",
     "C1",
+    "Cz",
     "C5",
     "TP7",
     "CP3",
