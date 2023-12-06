@@ -132,7 +132,7 @@ def main(
     assert not os.path.isdir(f"checkpoints/{run_name}")
     os.makedirs(f"checkpoints/{run_name}")
 
-    # run_eval(wmodel=wmodel, val_dataloader=val_dataloader, metrics=metrics)
+    run_eval(wmodel=wmodel, val_dataloader=val_dataloader, metrics=metrics)
 
     wandb.init(project="telepath", name=run_name, config=config)
     while True:
