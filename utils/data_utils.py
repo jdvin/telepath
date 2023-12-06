@@ -51,7 +51,9 @@ def get_transform(
             .transpose(1, 2)
             .to(torch.float32)
         )
-        objects = [" " + object_id_to_word[object_id] for object_id in batch["object"]]
+        objects = [
+            " " + object_id_to_word[object_id].strip() for object_id in batch["object"]
+        ]
         transformed_batch["input_ids"] = tokenizer.batch_encode_plus(
             objects,
             padding="max_length",
