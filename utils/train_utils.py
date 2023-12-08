@@ -28,6 +28,8 @@ class Metric:
     _past: Any | None = None
     reset: bool = False
     _reset_value: Any | None = None
+    suffixes: list[str] = field(default_factory=list)
+    hidden: bool = False
 
     def __post_init__(self):
         if self.reset:
@@ -48,6 +50,13 @@ def log_metrics(metrics: dict[str, Metric]):
             metric._log = False
             metric._past = metric.value
             key = key.replace("_", "/")
+            # Wandb location for metrics that are not shown by default.
+            # https://github.com/wandb/wandb/issues/3967
+            if metric.hidden:
+                key = f"hidden_panel/{key}"
+            # If we want they key to change dynamically each time it gets logged (e.g., if we want to keep track of how a table will change over time).
+            if metric.suffixes:
+                key = f"{key}_{'_'.join([suffix + metrics[suffix].value for suffix in metric.suffixes])})"
             log_metrics[key] = metric.value
             if metric.reset:
                 metric.value = metric._reset_value

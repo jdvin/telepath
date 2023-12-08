@@ -116,6 +116,8 @@ def main(
             wandb.Table(columns=["target", "output"]),
             MetricLogRule.MANUAL,
             reset=True,
+            suffixes=["step", "epoch"],
+            hidden=True,
         ),
     )
     metrics["lr"].value = lr_scheduler.get_last_lr()[0]

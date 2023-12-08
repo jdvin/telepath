@@ -12,12 +12,13 @@ This project exists in orbit around one fundamental question: to what extent can
     - [x] Fix logging
     - [x] Checkpointing
     - [ ] Custom metrics
-        - [ ] Naiive accuracy on object generation.
+        - [x] Naiive accuracy on object generation.
         - [ ] Flexible accruracy (Capitalisations, synonyms)
         - [ ] Semantic Similarity on object generations
 - [ ] Architecture Ideas
     - [ ] COGVLM style neural decoder-only model: https://arxiv.org/pdf/2311.03079.pdf
     - [ ] Conv layers?
+    - [ ] Pretrained Encoder
 - [ ] Interp
     - [ ] On base E-D Telepath
         - [ ] Nearest-Neighbour token space tracking of encoder outputs
@@ -30,6 +31,10 @@ This project exists in orbit around one fundamental question: to what extent can
     - [ ] Multiple eval data loaders
     - [ ] Multi-worker dataloader.
 - [ ] Datasets
+    - [ ] Data Augmentations
+        - [ ] Duplicate rows with synoynms
+        - [ ] Similate noise associated with eeg to create augmented rows.
+        - [ ] Increase EEG window.
     - [ ] Multi-subject training set
     - [ ] Subject-held-out eval set
     - [ ] Subject+Object-held-out eval set
