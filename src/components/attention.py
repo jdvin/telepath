@@ -41,11 +41,18 @@ class MultiheadAttention(torch.nn.Module):
         """Split matrices into heads and reshape to have heads as child ranks."""
         return x.view(B, T, self.n_heads, D // self.n_heads).transpose(1, 2)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, T, D = x.size()  # Batch size, sequence length, model dimensionality.
+    def forward(self, x: torch.Tensor, qkv_expert: torch.Tensor = None) -> torch.Tensor:
+        B, T, D = x.size()  # Batch size, sequence length, model dimension.
 
         # Project x into the query, key and value matrices, then split along the extended dimension.
         q, k, v = self.qkv_proj(x).split(self.d_model, dim=-1)
+
+        # Concatenate the core and expert query, key and value matrices.
+        if qkv_expert is not None:
+            q_expert, k_expert, v_expert = qkv_expert.split(self.d_model, dim=-1)
+            q = torch.cat([q, q_expert], dim=1)
+            k = torch.cat([k, k_expert], dim=1)
+            v = torch.cat([v, v_expert], dim=1)
 
         q = self.split_heads(q, B, T, D)
         k = self.split_heads(k, B, T, D)
@@ -76,4 +83,35 @@ class MultiheadAttention(torch.nn.Module):
 
         y = self.resid_dropout(y)
 
-        return y
+
+class ExpertAttention(MultiheadAttention):
+    def __init__(
+        self,
+        n_heads: int,
+        d_model: int,
+        core_proj_bias: bool,
+        expert_proj_bias: bool,
+        core_block_size: int,
+        expert_block_size: int,
+        dropout: float = 0.1,
+        is_causal: bool = False,
+        flash: bool = True,
+    ):
+        super().__init__(
+            n_heads,
+            d_model,
+            core_proj_bias,
+            expert_block_size + core_block_size,
+            dropout,
+            is_causal,
+            flash,
+        )
+        self.expert_block_size = expert_block_size
+        self.non_expert_block_size = non_expert_block_size
+        self.expert_qkv_proj = nn.Linear(d_model, 3 * d_model, bias=proj_bias)
+
+    def forward(x: torch.Tensor):
+        # Perform the expert emebdding projection separately.
+        qkv_expert = self.expert_qkv_proj(x[:, :expert_block_size, :])
+        # Concatenate with what will become the core embedding projection.
+        return super().forward(x[:, expert_block_size:, :], qkv_expert)

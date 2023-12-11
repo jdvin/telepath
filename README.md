@@ -17,8 +17,18 @@ This project exists in orbit around one fundamental question: to what extent can
         - [ ] Semantic Similarity on object generations
 - [ ] Architecture Ideas
     - [ ] COGVLM style neural decoder-only model: https://arxiv.org/pdf/2311.03079.pdf
+        - [ ] Expert Block
+            - [x] networks
+            - [x] routing
+        - [ ] Expert encoder
+            - [ ] Empty network
+            - [ ] Pretrained network
+        - [ ] Expert GPT
+            - [ ] transformer
+            - [ ] encoding
+            - [ ] routing
+            - [ ] weight freezing
     - [ ] Conv layers?
-    - [ ] Pretrained Encoder
 - [ ] Interp
     - [ ] On base E-D Telepath
         - [ ] Nearest-Neighbour token space tracking of encoder outputs

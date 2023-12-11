@@ -7,12 +7,18 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 from .components.norm import LayerNorm
-from .components.attention import MultiheadAttention
+from .components.attention import MultiheadAttention, ExpertAttention
 
 
 class Block(nn.Module):
     def __init__(
-        self, n_heads: int, d_model: int, bias: bool, block_size: int, dropout: float
+        self,
+        n_heads: int,
+        d_model: int,
+        bias: bool,
+        block_size: int,
+        dropout: float,
+        flash: bool = True,
     ):
         super().__init__()
         self.ln_1 = LayerNorm(d_model, affine=True, bias=bias)
@@ -23,7 +29,7 @@ class Block(nn.Module):
             block_size=block_size,
             dropout=dropout,
             is_causal=True,
-            flash=False,
+            flash=flash,
         )
         self.ln_2 = LayerNorm(d_model, affine=True, bias=bias)
         self.mlp = nn.Sequential(
@@ -39,6 +45,49 @@ class Block(nn.Module):
         return x
 
 
+class ExpertBlock(Block):
+    def __init__(
+        self,
+        n_heads: int,
+        d_model: int,
+        bias: bool,
+        block_size: int,
+        dropout: float,
+        flash: bool = True,
+    ):
+        super().__init__(n_heads, d_model, bias, block_size, dropout)
+        self.attn = ExpertAttention(
+            n_heads=n_heads,
+            d_model=d_model,
+            core_proj_bias=bias,
+            expert_proj_bias=bias,
+            core_block_size=block_size,
+            expert_block_size=block_size,
+            dropout=dropout,
+            is_causal=True,
+            flash=flash,
+        )
+        self.expert_mlp = nn.Sequential(
+            nn.Linear(d_model, 4 * d_model, bias=bias),
+            nn.GELU(),
+            nn.Linear(4 * d_model, d_model, bias=bias),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.attn(self.ln_1(x))
+        x_resid = x.clone()
+        x = self.ln_2(x)
+        x = x_resid + torch.cat(
+            (
+                self.expert_mlp(x[:, : self.expert_block_size]),
+                self.mlp(x[:, self.expert_block_size :]),
+            )
+        )
+
+        return x
+
+
 class GPT(nn.Module):
     def __init__(
         self,
@@ -49,6 +98,7 @@ class GPT(nn.Module):
         vocab_size: int,
         block_size: int,
         dropout: float,
+        flash: bool = True,
     ):
         super().__init__()
         self.transformer = nn.ModuleDict(
@@ -58,7 +108,7 @@ class GPT(nn.Module):
                 drop=nn.Dropout(dropout),
                 blocks=nn.ModuleList(
                     [
-                        Block(n_heads, d_model, bias, block_size, dropout)
+                        Block(n_heads, d_model, bias, block_size, dropout, flash)
                         for _ in range(n_layers)
                     ]
                 ),
@@ -139,7 +189,9 @@ class GPT(nn.Module):
             logits = self.forward(input_ids, concat_embed, inference=True)
             input_ids = torch.cat([input_ids, logits.argmax(dim=-1)], dim=1)
             # Get the index of every generation that has generated the stop token.
-            stop_indexes = (input_ids[:, -1] == stop_token).nonzero(as_tuple=True)[0].tolist()
+            stop_indexes = (
+                (input_ids[:, -1] == stop_token).nonzero(as_tuple=True)[0].tolist()
+            )
             while True:
                 if not stop_indexes:
                     break
@@ -150,7 +202,9 @@ class GPT(nn.Module):
                 # Map from current relative index to batch index.
                 generations[batch_index] = input_ids[i, :].tolist()
                 input_ids = torch.cat([input_ids[:i, :], input_ids[i + 1 :, :]], dim=0)
-                concat_embed = torch.cat([concat_embed[:i, :, :], concat_embed[i + 1 :, :, :]], dim=0) 
+                concat_embed = torch.cat(
+                    [concat_embed[:i, :, :], concat_embed[i + 1 :, :, :]], dim=0
+                )
                 # Shift the indexes after the one just removed.
                 stop_indexes = [(j - 1) if j > i else j for j in stop_indexes]
 
@@ -254,7 +308,7 @@ class GPT(nn.Module):
             print(f"overriding dropout rate to {override_args['dropout']}")
             config_args["dropout"] = override_args["dropout"]
         # create a from-scratch initialized GPT model
-        model = GPT(**config_args)  # type: ignore
+        model = cls(**config_args)  # type: ignore
         sd = model.state_dict()
         sd_keys = sd.keys()
         sd_keys = [
@@ -335,3 +389,36 @@ class GPT(nn.Module):
             f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
         )
         return optim_groups
+
+
+class ExpertGPT(GPT):
+    def __init__(
+        self,
+        n_heads: int,
+        d_model: int,
+        bias: bool,
+        n_layers: int,
+        vocab_size: int,
+        core_block_size: int,
+        expert_block_size: int,
+        dropout: float,
+        flash: bool = True,
+    ):
+        super().__init__(
+            n_heads,
+            d_model,
+            bias,
+            n_layers,
+            vocab_size,
+            core_block_size,
+            dropout,
+            flash,
+        )
+        for i in range(len(self.transformer.blocks)):
+            self.transformer.blocks[i] = ExpertBlock(
+                n_heads,
+                d_model,
+                bias,
+                core_block_size + expert_block_size,
+                dropout,
+            )
