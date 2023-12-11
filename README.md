@@ -28,6 +28,8 @@ This project exists in orbit around one fundamental question: to what extent can
             - [ ] encoding
             - [ ] routing
             - [ ] weight freezing
+        - [ ] tests
+            - [ ] routing
     - [ ] Conv layers?
 - [ ] Interp
     - [ ] On base E-D Telepath

@@ -51,18 +51,21 @@ class ExpertBlock(Block):
         n_heads: int,
         d_model: int,
         bias: bool,
-        block_size: int,
+        core_block_size: int,
+        expert_block_size: int,
         dropout: float,
         flash: bool = True,
     ):
-        super().__init__(n_heads, d_model, bias, block_size, dropout)
+        super().__init__(
+            n_heads, d_model, bias, core_block_size + expert_block_size, dropout
+        )
         self.attn = ExpertAttention(
             n_heads=n_heads,
             d_model=d_model,
             core_proj_bias=bias,
             expert_proj_bias=bias,
-            core_block_size=block_size,
-            expert_block_size=block_size,
+            core_block_size=core_block_size,
+            expert_block_size=expert_block_size,
             dropout=dropout,
             is_causal=True,
             flash=flash,
@@ -73,6 +76,9 @@ class ExpertBlock(Block):
             nn.Linear(4 * d_model, d_model, bias=bias),
             nn.Dropout(dropout),
         )
+
+        self.expert_block_size = expert_block_size
+        self.core_block_size = core_block_size
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.attn(self.ln_1(x))
@@ -419,6 +425,30 @@ class ExpertGPT(GPT):
                 n_heads,
                 d_model,
                 bias,
-                core_block_size + expert_block_size,
+                core_block_size,
+                expert_block_size,
                 dropout,
+                flash,
             )
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        expert_embed: torch.Tensor,
+        inference: bool = False,
+    ) -> torch.Tensor:
+        tok_emb = self.transformer.wte(input_ids)
+        T = tok_emb.size(1)
+        pos = torch.arange(0, T, dtype=torch.long, device=input_ids.device)
+        pos_emb = self.transformer.wpe(pos)
+        x = torch.cat((expert_embed, tok_emb + pos_emb), dim=1)
+        x = self.transformer.drop(x)
+        for block in self.transformer.blocks:
+            x = block(x)
+        x = self.transformer.ln_f(x)
+        if not inference:
+            logits: torch.Tensor = self.lm_head(x[:, self.expert_block_size :, :])
+        else:
+            # Return logits for final token of each sequence. Nesting the last dim in a list ensures that it is not flattened.
+            logits: torch.Tensor = self.lm_head(x[:, [-1]])
+        return logits
