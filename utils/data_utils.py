@@ -58,7 +58,8 @@ def get_transform(
             objects,
             padding="max_length",
             truncation=True,
-            max_length=max_length - 2,
+            max_length=max_length
+            - 2,  # We are going to add the start and end tokens after the fact.
             return_tensors="pt",
         )["input_ids"]
         transformed_batch["input_ids"] = torch.cat(
@@ -73,6 +74,24 @@ def get_transform(
         return transformed_batch
 
     return transform
+
+
+# def get_append_synonyms(
+#     dataset: datasets.Dataset,
+#     synonyms_data_path: str,
+#     things_concepts_path: str = "data/things_concepts.csv",
+# ):
+#     # Load the map from object ID to word.
+#     things_concepts = pd.read_csv(things_concepts_path)
+
+#     object_id_to_synonyms = dict(
+#         zip(things_concepts["uniqueID"], things_concepts["WordNet Synonyms"])
+#     )
+
+#
+
+#     def append_synonyms(batch):
+#         # Duplicate each element in the batch, swapping the object for its synonym and append to `synonym_dataset`.
 
 
 def create_dataset(

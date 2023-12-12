@@ -5,7 +5,7 @@ import torch
 from torch import nn
 import yaml
 
-from .gpt import GPT
+from .gpt import GPT, ExpertGPT
 from .components import attention, norm
 
 
@@ -25,17 +25,12 @@ class TelepathConfig:
     encoder_dropout: float
 
     tokenizer_path: str
-    pretrained_gpt: GPT | None = None
-    freeze_gpt: bool = True
-    gpt_start_token: int = 3784
-    gpt_stop_token: int = 50256
-    gpt_n_heads: int = 12
-    gpt_d_model: int = 768
-    gpt_bias: bool = True
-    gpt_n_layers: int = 12
-    gpt_vocab_size: int = 50257
-    gpt_block_size: int = 110
-    gpt_dropout: float = 0.1
+    pretrained_gpt: str
+    freeze_gpt: bool
+    gpt_start_token: int
+    gpt_stop_token: int
+    gpt_block_size: int
+    gpt_dropout: float
 
     @classmethod
     def from_yaml(cls, path: str):
@@ -49,7 +44,6 @@ class WaveNetEncoder(nn.Module):
 
 
 class AttentionEncoderBlock(nn.Module):
-    # TODO: Should probably be recurrent to take advantage of EEG signal from prior objects..
     def __init__(
         self, block_size: int, d_model: int, n_heads: int, bias: bool, dropout: float
     ):
@@ -151,19 +145,8 @@ class Telepath(nn.Module):
             n_layers=config.encoder_n_layers,
         )
 
-        if config.pretrained_gpt:
-            self.decoder = GPT.from_pretrained(model_type=config.pretrained_gpt)
-            self.decoder.crop_block_size(config.gpt_block_size)
-        else:
-            self.decoder = GPT(
-                n_heads=config.gpt_n_heads,
-                d_model=config.gpt_d_model,
-                bias=config.gpt_bias,
-                n_layers=config.gpt_n_layers,
-                vocab_size=config.gpt_vocab_size,
-                block_size=config.gpt_block_size,
-                dropout=config.gpt_dropout,
-            )
+        self.decoder = ExpertGPT.from_pretrained(model_type=config.pretrained_gpt)
+        self.decoder.crop_block_size(config.gpt_block_size)
 
         self.start_token = config.gpt_start_token
         self.stop_token = config.gpt_stop_token
@@ -178,7 +161,7 @@ class Telepath(nn.Module):
         enc = self.pre_norm(eeg)
         enc = self.encoder_proj(enc)
         enc = self.encoder(enc)
-        return self.decoder.forward(input_ids, concat_embed=enc)
+        return self.decoder.forward(input_ids, embed=enc)
 
     @torch.no_grad()
     def generate(
@@ -197,6 +180,6 @@ class Telepath(nn.Module):
         enc = self.encoder(enc)
         return self.decoder.generate(
             input_ids=torch.full((batch_size, 1), self.start_token).to(device),
-            concat_embed=enc,
+            embed=enc,
             stop_token=stop_token or self.stop_token,
         )

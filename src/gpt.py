@@ -146,14 +146,14 @@ class GPT(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        concat_embed: torch.Tensor | None = None,
+        embed: torch.Tensor | None = None,
         inference: bool = False,
     ) -> torch.Tensor:
         # TODO: KV cache.
         # B x T x D.
         tok_emb = self.transformer.wte(x)  # type: ignore
-        if concat_embed is not None:
-            tok_emb = torch.cat([concat_embed, tok_emb], dim=1)
+        if embed is not None:
+            tok_emb = torch.cat([embed, tok_emb], dim=1)
         T = tok_emb.size(1)
         pos = torch.arange(0, T, dtype=torch.long, device=x.device)
         pos_emb = self.transformer.wpe(pos)  # type: ignore
@@ -173,7 +173,7 @@ class GPT(nn.Module):
     def generate(
         self,
         input_ids: torch.Tensor,
-        concat_embed: torch.Tensor,
+        embed: torch.Tensor,
         max_length: int = 10,
         stop_token: int = 50256,
     ) -> list[list[int]]:
@@ -182,7 +182,7 @@ class GPT(nn.Module):
         Pops generations off the inference stack as they complete.
         Attributes:
             input_ids: Input token ids of shape (batch_size, n_tokens).
-            concat_embed: Concatenated embeddings of shape (batch_size, k, d_model).
+            concat_embed: Additional embeddings used by the model forward method. Must be of size (batch_size, k, d_model).
             max_length: Maximum length of the generated sequence.
             stop_token: Token id of the stop token.
         """
@@ -192,7 +192,7 @@ class GPT(nn.Module):
         # Used to track the indexes of the running generations.
         generating_batch_indexes = list(range(batch_size))
         for _ in range(max_length):
-            logits = self.forward(input_ids, concat_embed, inference=True)
+            logits = self.forward(input_ids, embed, inference=True)
             input_ids = torch.cat([input_ids, logits.argmax(dim=-1)], dim=1)
             # Get the index of every generation that has generated the stop token.
             stop_indexes = (
@@ -208,9 +208,7 @@ class GPT(nn.Module):
                 # Map from current relative index to batch index.
                 generations[batch_index] = input_ids[i, :].tolist()
                 input_ids = torch.cat([input_ids[:i, :], input_ids[i + 1 :, :]], dim=0)
-                concat_embed = torch.cat(
-                    [concat_embed[:i, :, :], concat_embed[i + 1 :, :, :]], dim=0
-                )
+                embed = torch.cat([embed[:i, :, :], embed[i + 1 :, :, :]], dim=0)
                 # Shift the indexes after the one just removed.
                 stop_indexes = [(j - 1) if j > i else j for j in stop_indexes]
 
@@ -434,14 +432,15 @@ class ExpertGPT(GPT):
     def forward(
         self,
         input_ids: torch.Tensor,
-        expert_embed: torch.Tensor,
+        embed: torch.Tensor,
         inference: bool = False,
     ) -> torch.Tensor:
+        """Subtly different forward method."""
         tok_emb = self.transformer.wte(input_ids)
         T = tok_emb.size(1)
         pos = torch.arange(0, T, dtype=torch.long, device=input_ids.device)
         pos_emb = self.transformer.wpe(pos)
-        x = torch.cat((expert_embed, tok_emb + pos_emb), dim=1)
+        x = torch.cat((embed, tok_emb + pos_emb), dim=1)
         x = self.transformer.drop(x)
         for block in self.transformer.blocks:
             x = block(x)

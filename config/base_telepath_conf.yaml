@@ -6,7 +6,7 @@ pre_norm_bias: false
 encoder_block_size: 100
 encoder_d_model: 768
 encoder_n_heads: 6
-encoder_n_layers: 6
+encoder_n_layers: 2
 encoder_bias: true
 encoder_dropout: 0.1
 tokenizer_path: gpt2
@@ -14,4 +14,5 @@ pretrained_gpt: gpt2
 freeze_gpt: true
 gpt_start_token: 3784
 gpt_stop_token: 50256
-gpt_block_size: 110
+gpt_block_size: 107
+gpt_dropout: 0.1
