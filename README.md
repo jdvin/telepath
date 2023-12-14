@@ -27,16 +27,18 @@ This project exists in orbit around one fundamental question: to what extent can
             - [x] encoding
             - [x] routing
         - [ ] new telepath
-            - [ ] weight freezing
+            - [x] weight freezing
         - [ ] tests
             - [ ] routing
                 - [ ] Assuming the attention matrices allow for it, do expert and core computations stat separate?
             - [ ] generation
                 - [ ] create a test GPT which overrides forward with a deterministic computation and ensure the array slicing works correctly
+            - [ ] weight freezing
+                - [ ] are only expert params trainable
     - [ ] Pretrained encoder
     - [ ] Conv layers?
 - [ ] Interp
-    - [ ] Similarity of neural-query to target-token-key vectors.
+    - [ ] Similarity of neural-expert-query to target-token-key vectors.
 - [ ] Optimisatons
     - [x] Batch generate.
     - [ ] KV Cache.

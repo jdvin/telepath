@@ -405,6 +405,7 @@ class ExpertGPT(GPT):
         vocab_size: int,
         core_block_size: int,
         expert_block_size: int,
+        freeze_core: bool,
         dropout: float,
         flash: bool = True,
     ):
@@ -429,6 +430,8 @@ class ExpertGPT(GPT):
                 flash,
             )
 
+        self.freeze_core = freeze_core
+
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -451,3 +454,29 @@ class ExpertGPT(GPT):
             # Return logits for final token of each sequence. Nesting the last dim in a list ensures that it is not flattened.
             logits: torch.Tensor = self.lm_head(x[:, [-1]])
         return logits
+
+    def optim_groups(self, weight_decay: float = 1e-1):
+        # Filter out those that do not require grad
+        # If freeze_core, then only optimize expert parameters.
+        param_dict = {
+            pn: p
+            for pn, p in self.named_parameters()
+            if p.requires_grad and not (self.freeze_expert and "expert" not in pn)
+        }
+        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
+        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+        optim_groups = [
+            {"params": decay_params, "weight_decay": weight_decay},
+            {"params": nodecay_params, "weight_decay": 0.0},
+        ]
+        num_decay_params = sum(p.numel() for p in decay_params)
+        num_nodecay_params = sum(p.numel() for p in nodecay_params)
+        print(
+            f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters"
+        )
+        print(
+            f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
+        )
+        return optim_groups

@@ -138,6 +138,7 @@ def main(
 
     wandb.init(project="telepath", name=run_name, config=config)
     while True:
+        # Forward and backward pass.
         loss = wmodel.step(micro_batch)
         loss = loss / grad_accum_steps
         metrics["train_loss"].value += loss.item()
@@ -150,6 +151,7 @@ def main(
             metrics["microstep"].value += 1
             continue
 
+        # Greidnt application and logging.
         optim.step()
         optim.zero_grad(set_to_none=True)
         lr_scheduler.step()
