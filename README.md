@@ -43,6 +43,8 @@ This project exists in orbit around one fundamental question: to what extent can
     - [ ] Half precision training.
     - [ ] Multiple eval data loaders
     - [ ] Multi-worker dataloader.
+- [ ] Training
+    - [ ] DPO where negative preferences are selected stochastically from low semantic similarity objects
 - [ ] Datasets
     - [ ] Data Augmentations
         - [ ] Duplicate rows with synoynms
