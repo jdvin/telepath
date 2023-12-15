@@ -1,3 +1,5 @@
+import random
+
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 from torch.nn import functional as F
@@ -98,19 +100,18 @@ iteration = 0
 
 
 def test_generation():
+    # TODO: Modify this to test for the continuous alignment of the embedding and the output tokens.
     gpt2 = GPT.from_pretrained("gpt2")
     stop_token_id = 50256
     max_length = 10
 
-    def dummy_forward(input_ids, embed, inference) -> torch.Tensor:
+    def dummy_forward(input_ids, embeddings, inference) -> torch.Tensor:
         global iteration
         # Each output is the absolute index of the sequence in the batch unless seq_n == iteration, then we append the stop token to end the sequence.
-        n_generating = input_ids.size(0)
-        n_complete = 3 - n_generating
         out = torch.tensor(
             [
-                [stop_token_id] if iteration - (n_complete) == i else [i + n_complete]
-                for i in range(n_generating)
+                [stop_token_id] if iteration == embed[0][0] else [embed[0][0]]
+                for embed, seq in zip(embeddings, input_ids)
             ]
         )
 
@@ -123,17 +124,19 @@ def test_generation():
 
     gpt2.forward = dummy_forward  # type: ignore
 
+    embeddings = torch.tensor([[[2]], [[1]], [[3]]])
+
     generations = gpt2.generate(
-        input_ids=torch.tensor([[0], [1], [2]]),
-        embed=None,
+        input_ids=torch.tensor([[0], [0], [0]]),
+        embed=embeddings,
         max_length=max_length,
         stop_token=stop_token_id,
     )
 
-    assert generations == [
-        [0, stop_token_id],
-        [1, 1, stop_token_id],
-        [2, 2, 2, stop_token_id],
+    assert sorted(generations, key=lambda g: len(g)) == [
+        [0, 1, stop_token_id],
+        [0, 2, 2, stop_token_id],
+        [0, 3, 3, 3, stop_token_id],
     ]
 
 

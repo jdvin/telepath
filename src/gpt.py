@@ -209,7 +209,7 @@ class GPT(nn.Module):
                 # Map from current relative index to batch index.
                 generations[batch_index] = input_ids[i, :].tolist()
                 input_ids = torch.cat([input_ids[:i, :], input_ids[i + 1 :, :]], dim=0)
-                if embed:
+                if embed is not None:
                     embed = torch.cat([embed[:i, :, :], embed[i + 1 :, :, :]], dim=0)
                 # Shift the indexes after the one just removed.
                 stop_indexes = [(j - 1) if j > i else j for j in stop_indexes]
