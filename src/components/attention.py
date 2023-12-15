@@ -83,6 +83,8 @@ class MultiheadAttention(torch.nn.Module):
 
         y = self.resid_dropout(y)
 
+        return y
+
 
 class ExpertAttention(MultiheadAttention):
     def __init__(

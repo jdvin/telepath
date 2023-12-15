@@ -1,5 +1,6 @@
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
+from torch.nn import functional as F
 
 from src.gpt import GPT
 from utils.data_utils import get_transform
@@ -79,7 +80,6 @@ def test_attention():
     hf_attn = hf_gpt.transformer.h[0].attn
     cus_opt = cus_attn(activations)
     hf_opt = hf_attn(activations)[0]
-
     assert torch.allclose(cus_opt, hf_opt, atol=1e-3)
     activations = hf_opt
 
@@ -92,3 +92,50 @@ def test_mlp():
     cus_opt = cus_mlp(activations)
     hf_opt = hf_mlp(activations)
     assert torch.allclose(cus_opt, hf_opt, atol=1e-2)
+
+
+iteration = 0
+
+
+def test_generation():
+    gpt2 = GPT.from_pretrained("gpt2")
+    stop_token_id = 50256
+    max_length = 10
+
+    def dummy_forward(input_ids, embed, inference) -> torch.Tensor:
+        global iteration
+        # Each output is the absolute index of the sequence in the batch unless seq_n == iteration, then we append the stop token to end the sequence.
+        n_generating = input_ids.size(0)
+        n_complete = 3 - n_generating
+        out = torch.tensor(
+            [
+                [stop_token_id] if iteration - (n_complete) == i else [i + n_complete]
+                for i in range(n_generating)
+            ]
+        )
+
+        out = F.one_hot(
+            out,
+            gpt2.vocab_size,
+        )
+        iteration += 1
+        return out
+
+    gpt2.forward = dummy_forward  # type: ignore
+
+    generations = gpt2.generate(
+        input_ids=torch.tensor([[0], [1], [2]]),
+        embed=None,
+        max_length=max_length,
+        stop_token=stop_token_id,
+    )
+
+    assert generations == [
+        [0, stop_token_id],
+        [1, 1, stop_token_id],
+        [2, 2, 2, stop_token_id],
+    ]
+
+
+def test_expert_gpt():
+    pass

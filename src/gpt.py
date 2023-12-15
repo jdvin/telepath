@@ -124,6 +124,7 @@ class GPT(nn.Module):
         assert isinstance(self.transformer.wpe, nn.Embedding)
         self.lm_head = nn.Linear(d_model, vocab_size, bias=bias)
         self.block_size = block_size
+        self.vocab_size = vocab_size
 
         self.apply(self._init_weights)
         for pn, p in self.named_parameters():
@@ -173,7 +174,7 @@ class GPT(nn.Module):
     def generate(
         self,
         input_ids: torch.Tensor,
-        embed: torch.Tensor,
+        embed: torch.Tensor | None = None,
         max_length: int = 10,
         stop_token: int = 50256,
     ) -> list[list[int]]:
@@ -208,7 +209,8 @@ class GPT(nn.Module):
                 # Map from current relative index to batch index.
                 generations[batch_index] = input_ids[i, :].tolist()
                 input_ids = torch.cat([input_ids[:i, :], input_ids[i + 1 :, :]], dim=0)
-                embed = torch.cat([embed[:i, :, :], embed[i + 1 :, :, :]], dim=0)
+                if embed:
+                    embed = torch.cat([embed[:i, :, :], embed[i + 1 :, :, :]], dim=0)
                 # Shift the indexes after the one just removed.
                 stop_indexes = [(j - 1) if j > i else j for j in stop_indexes]
 
@@ -364,10 +366,6 @@ class GPT(nn.Module):
                 assert sd_hf[k].shape == sd[mapped_key].shape
                 with torch.no_grad():
                     sd[mapped_key].copy_(sd_hf.pop(k))
-
-        # import pdb
-
-        # pdb.set_trace()
 
         return model
 
