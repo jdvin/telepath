@@ -100,6 +100,7 @@ iteration = 0
 
 
 def test_generation():
+    global iteration
     # TODO: Modify this to test for the continuous alignment of the embedding and the output tokens.
     gpt2 = GPT.from_pretrained("gpt2")
     stop_token_id = 50256
@@ -124,20 +125,29 @@ def test_generation():
 
     gpt2.forward = dummy_forward  # type: ignore
 
-    embeddings = torch.tensor([[[2]], [[1]], [[3]]])
+    for embeddings in [
+        torch.tensor([[[1]], [[2]], [[3]]]),
+        torch.tensor([[[1]], [[3]], [[2]]]),
+        torch.tensor([[[2]], [[1]], [[3]]]),
+        torch.tensor([[[2]], [[3]], [[1]]]),
+        torch.tensor([[[3]], [[1]], [[2]]]),
+        torch.tensor([[[3]], [[2]], [[1]]]),
+    ]:
+        iteration = 0
+        print(embeddings)
+        generations = gpt2.generate(
+            input_ids=torch.tensor([[0], [0], [0]]),
+            embed=embeddings,
+            max_length=max_length,
+            stop_token=stop_token_id,
+        )
+        print(generations)
 
-    generations = gpt2.generate(
-        input_ids=torch.tensor([[0], [0], [0]]),
-        embed=embeddings,
-        max_length=max_length,
-        stop_token=stop_token_id,
-    )
-
-    assert sorted(generations, key=lambda g: len(g)) == [
-        [0, 1, stop_token_id],
-        [0, 2, 2, stop_token_id],
-        [0, 3, 3, 3, stop_token_id],
-    ]
+        assert sorted(generations, key=lambda g: len(g)) == [
+            [0, 1, stop_token_id],
+            [0, 2, 2, stop_token_id],
+            [0, 3, 3, 3, stop_token_id],
+        ]
 
 
 def test_expert_gpt():
