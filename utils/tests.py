@@ -4,7 +4,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 from torch.nn import functional as F
 
-from src.gpt import GPT
+from src.gpt import GPT, ExpertBlock
 from utils.data_utils import get_transform
 
 
@@ -112,7 +112,7 @@ def test_generation():
         out = torch.tensor(
             [
                 [stop_token_id] if iteration == embed[0][0] else [embed[0][0]]
-                for embed, seq in zip(embeddings, input_ids)
+                for embed in embeddings
             ]
         )
 
@@ -125,6 +125,7 @@ def test_generation():
 
     gpt2.forward = dummy_forward  # type: ignore
 
+    # Ensure that we are not just getting lucky based on the order that the generations are completing (which depends on the embedding).
     for embeddings in [
         torch.tensor([[[1]], [[2]], [[3]]]),
         torch.tensor([[[1]], [[3]], [[2]]]),
@@ -151,4 +152,87 @@ def test_generation():
 
 
 def test_expert_gpt():
-    pass
+    block = ExpertBlock(
+        n_heads=3,
+        d_model=9,
+        bias=True,
+        expert_block_size=2,
+        core_block_size=2,
+        dropout=0.0,
+        is_causal=True,
+        flash=True,
+    )
+
+    # import pdb
+
+    # pdb.set_trace()
+    # block.attn.qkv_proj.weight.data = torch.tensor(
+    #     [
+    #         [0, 0, 0, 0],
+    #         [0, 0, 0, 0],
+    #         [1, 1, 1, 1],
+    #         [1, 1, 1, 1],
+    #         [0, 0, 0, 0],
+    #         [0, 0, 0, 0],
+    #         [1, 1, 1, 1],
+    #         [1, 1, 1, 1],
+    #         [0, 0, 0, 0],
+    #         [0, 0, 0, 0],
+    #         [1, 1, 1, 1],
+    #         [1, 1, 1, 1],
+    #     ],
+    #     dtype=torch.float,
+    # )
+    # block.attn.qkv_proj.bias.data = torch.tensor(
+    #     [1, 1, 1, 1],
+    #     dtype=torch.float,
+    # )
+    # block.attn.out_proj.weight.data = torch.tensor(
+    #     [
+    #         [1, 1, 1, 1],
+    #         [1, 1, 1, 1],
+    #         [1, 1, 1, 1],
+    #         [1, 1, 1, 1],
+    #     ],
+    #     dtype=torch.float,
+    # )
+    # block.attn.out_proj.bias.data = torch.tensor(
+    #     [1, 1, 1, 1],
+    #     dtype=torch.float,
+    # )
+    # block.attn.expert_qkv_proj.weight.data = torch.tensor(
+    #     [
+    #         [1, 1, 1, 1],
+    #         [1, 1, 1, 1],
+    #         [0, 0, 0, 0],
+    #         [0, 0, 0, 0],
+    #         [1, 1, 1, 1],
+    #         [1, 1, 1, 1],
+    #         [0, 0, 0, 0],
+    #         [0, 0, 0, 0],
+    #         [1, 1, 1, 1],
+    #         [1, 1, 1, 1],
+    #         [0, 0, 0, 0],
+    #         [0, 0, 0, 0],
+    #     ],
+    #     dtype=torch.float,
+    # )
+    # block.attn.expert_qkv_proj.bias.data = torch.tensor(
+    #     [1, 1, 1, 1],
+    #     dtype=torch.float,
+    # )
+
+    x = torch.tensor(
+        [
+            [
+                [0, 0, 0, 1, 1, 1, 2, 2, 2],
+                [0, 0, 0, 1, 1, 1, 2, 2, 2],
+                [1, 1, 1, 0, 0, 0, 0, 0, 0],
+                [1, 1, 1, 0, 0, 0, 0, 0, 0],
+            ]
+        ],
+        dtype=torch.float,
+    )
+
+    out = block(x)
+    assert out.shape == (1, 4, 9)

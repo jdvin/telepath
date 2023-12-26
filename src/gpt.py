@@ -54,6 +54,7 @@ class ExpertBlock(Block):
         core_block_size: int,
         expert_block_size: int,
         dropout: float,
+        is_causal: bool = True,
         flash: bool = True,
     ):
         super().__init__(
@@ -67,7 +68,7 @@ class ExpertBlock(Block):
             core_block_size=core_block_size,
             expert_block_size=expert_block_size,
             dropout=dropout,
-            is_causal=True,
+            is_causal=is_causal,
             flash=flash,
         )
         self.expert_mlp = nn.Sequential(
@@ -86,9 +87,10 @@ class ExpertBlock(Block):
         x = self.ln_2(x)
         x = x_resid + torch.cat(
             (
-                self.expert_mlp(x[:, : self.expert_block_size]),
-                self.mlp(x[:, self.expert_block_size :]),
-            )
+                self.expert_mlp(x[:, : self.expert_block_size, :]),
+                self.mlp(x[:, self.expert_block_size :, :]),
+            ),
+            dim=1,
         )
 
         return x

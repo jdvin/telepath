@@ -53,6 +53,7 @@ class MultiheadAttention(torch.nn.Module):
             q = torch.cat([q, q_expert], dim=1)
             k = torch.cat([k, k_expert], dim=1)
             v = torch.cat([v, v_expert], dim=1)
+            T = T + qkv_expert.size(1)
 
         q = self.split_heads(q, B, T, D)
         k = self.split_heads(k, B, T, D)
@@ -109,11 +110,11 @@ class ExpertAttention(MultiheadAttention):
             flash,
         )
         self.expert_block_size = expert_block_size
-        self.non_expert_block_size = non_expert_block_size
-        self.expert_qkv_proj = nn.Linear(d_model, 3 * d_model, bias=proj_bias)
+        self.core_block_size = core_block_size
+        self.expert_qkv_proj = nn.Linear(d_model, 3 * d_model, bias=expert_proj_bias)
 
-    def forward(x: torch.Tensor):
+    def forward(self, x: torch.Tensor):
         # Perform the expert emebdding projection separately.
-        qkv_expert = self.expert_qkv_proj(x[:, :expert_block_size, :])
+        expert_embedding = self.expert_qkv_proj(x[:, : self.expert_block_size, :])
         # Concatenate with what will become the core embedding projection.
-        return super().forward(x[:, expert_block_size:, :], qkv_expert)
+        return super().forward(x[:, self.expert_block_size :, :], expert_embedding)
