@@ -13,7 +13,7 @@ This project exists in orbit around one fundamental question: to what extent can
     - [x] Checkpointing
     - [ ] Custom metrics
         - [x] Naiive accuracy on object generation.
-        - [ ] Flexible accruracy (Capitalisations, synonyms; just decode and use string matching)
+        - [x] Flexible accruracy (Capitalisations, synonyms; just decode and use string matching)
         - [ ] Semantic Similarity on object generations
 - [ ] Architecture Ideas
     - [ ] COGVLM style neural decoder-only model: https://arxiv.org/pdf/2311.03079.pdf
@@ -26,13 +26,14 @@ This project exists in orbit around one fundamental question: to what extent can
             - [x] transformer
             - [x] encoding
             - [x] routing
-        - [ ] new telepath
+        - [x] new telepath
             - [x] weight freezing
         - [ ] tests
+            - [x] expert GPT forward
             - [ ] routing
                 - [ ] Assuming the attention matrices allow for it, do expert and core computations stat separate?
-            - [ ] generation
-                - [ ] create a test GPT which overrides forward with a deterministic computation and ensure the array slicing works correctly
+            - [x] generation
+                - [x] create a test GPT which overrides forward with a deterministic computation and ensure the array slicing works correctly
             - [ ] weight freezing
                 - [ ] are only expert params trainable
     - [ ] Pretrained encoder

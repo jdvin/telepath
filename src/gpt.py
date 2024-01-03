@@ -461,7 +461,7 @@ class ExpertGPT(GPT):
         param_dict = {
             pn: p
             for pn, p in self.named_parameters()
-            if p.requires_grad and not (self.freeze_expert and "expert" not in pn)
+            if p.requires_grad and not (self.freeze_core and "expert" not in pn)
         }
         # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
         # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.

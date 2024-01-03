@@ -8,8 +8,21 @@ import yaml
 import wandb
 from tqdm import tqdm
 import torch
+import pandas as pd
 
 from src.wrapper import TelepathWrapper
+
+THINGS_CONCEPTS_PATH = "data/things_concepts.csv"
+SYNONYM_MAP = {
+    object_word.lower().strip(): [
+        synonym.lower().replace("_", " ").strip()
+        for synonym in synonyms.split(",")
+        if synonym.lower().replace("_", " ").strip() != object_word.lower().strip()
+    ]
+    for object_word, synonyms in pd.read_csv(THINGS_CONCEPTS_PATH)[
+        ["Word", "WordNet Synonyms"]
+    ].values
+}
 
 
 class MetricLogRule(Enum):
@@ -111,24 +124,26 @@ def load_yaml(path: str):
 def get_accuracy(
     batch: dict[str, torch.Tensor], wmodel: TelepathWrapper, metrics: dict[str, Metric]
 ) -> float:
-    """Naiive accuracy calculation.
-
-    Does not take into account the fact that the model may have predicted a synonym of the correct word.
-    """
+    """Slightly less naiive accuracy calculation."""
 
     pred_tokens: list[list[int]] = wmodel.model.generate(batch["eeg"], wmodel.device)
-    pred_text = wmodel.tokenizer.batch_decode(pred_tokens, skip_special_tokens=True)
-    true_text = wmodel.tokenizer.batch_decode(
+    batch_pred_text = wmodel.tokenizer.batch_decode(
+        pred_tokens, skip_special_tokens=True
+    )
+    batch_true_text = wmodel.tokenizer.batch_decode(
         batch["input_ids"], skip_special_tokens=True
     )
-    for pred, true in zip(pred_text, true_text):
-        metrics["generations"].value.add_data(true, pred)
-    assert len(pred_tokens) == len(batch["input_ids"])
     accuracy = 0
-    for pred, true in zip(pred_tokens, batch["input_ids"]):
-        # True values are padded for training.
-        if pred == true[: len(pred)]:
-            accuracy += 1 / len(pred_tokens)
+    for pred_text, true_text in zip(batch_pred_text, batch_true_text):
+        metrics["generations"].value.add_data(true_text, pred_text)
+        # TODO: This should be done in the data processing stage - check!.
+        true_text = true_text.lower().strip()
+        pred_text = pred_text.lower().strip()
+        # Using `in` allows to account for noise in the generation at the expense of speed.
+        if true_text in pred_text or any(
+            [synonym in pred_text for synonym in SYNONYM_MAP[true_text]]
+        ):
+            accuracy += 1 / len(batch_pred_text)
     return accuracy
 
 
