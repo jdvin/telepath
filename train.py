@@ -24,6 +24,7 @@ from src.wrapper import (
 parser = argparse.ArgumentParser()
 
 parser.add_argument("--run_name", type=str, required=True)
+parser.add_argument("--run_group", type=str, required=True)
 parser.add_argument("--model_config_path", type=str, required=True)
 parser.add_argument("--optimizer_config_path", type=str, required=True)
 parser.add_argument("--dataset_path", type=str)
@@ -42,6 +43,7 @@ LOG_INTERVAL = 1
 
 def main(
     run_name: str,
+    run_group: str,
     dataset_path: str,
     add_transform: bool,
     max_length: int,
@@ -136,7 +138,7 @@ def main(
 
     run_eval(wmodel=wmodel, val_dataloader=val_dataloader, metrics=metrics)
 
-    wandb.init(project="telepath", name=run_name, config=config)
+    wandb.init(project="telepath", group=run_group, name=run_name, config=config)
     while True:
         # Forward and backward pass.
         loss = wmodel.step(micro_batch)
@@ -187,6 +189,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     main(
         run_name=args.run_name,
+        run_group=args.run_group,
         dataset_path=args.dataset_path,
         add_transform=args.add_transform,
         max_length=args.max_length,

@@ -108,7 +108,7 @@ def test_generation():
 
     def dummy_forward(input_ids, embeddings, inference) -> torch.Tensor:
         global iteration
-        # Each output is the absolute index of the sequence in the batch unless seq_n == iteration, then we append the stop token to end the sequence.
+        # Each output is the value of the embedding for the given input unless `embedding_value == iteration`, then we append the stop token to end the sequence.
         out = torch.tensor(
             [
                 [stop_token_id] if iteration == embed[0][0] else [embed[0][0]]
