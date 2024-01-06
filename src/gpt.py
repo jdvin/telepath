@@ -109,6 +109,15 @@ class GPT(nn.Module):
         flash: bool = True,
     ):
         super().__init__()
+        # TODO: Probably swap to a config object.
+        self.n_heads = n_heads
+        self.d_model = d_model
+        self.bias = bias
+        self.n_layers = n_layers
+        self.vocab_size = vocab_size
+        self.block_size = block_size
+        self.dropout = dropout
+        self.flash = flash
         self.transformer = nn.ModuleDict(
             dict(
                 wte=nn.Embedding(vocab_size, d_model),
@@ -125,8 +134,6 @@ class GPT(nn.Module):
         )
         assert isinstance(self.transformer.wpe, nn.Embedding)
         self.lm_head = nn.Linear(d_model, vocab_size, bias=bias)
-        self.block_size = block_size
-        self.vocab_size = vocab_size
 
         self.apply(self._init_weights)
         for pn, p in self.named_parameters():
@@ -454,6 +461,29 @@ class ExpertGPT(GPT):
             # Return logits for final token of each sequence. Nesting the last dim in a list ensures that it is not flattened.
             logits: torch.Tensor = self.lm_head(x[:, [-1]])
         return logits
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_type: str,
+        expert_block_size: int,
+        freeze_core: bool,
+        override_args=None,
+    ):
+        base_gpt = super().from_pretrained(model_type, override_args)
+        sd = base_gpt.state_dict()
+        return cls(
+            base_gpt.n_heads,
+            base_gpt.d_model,
+            base_gpt.bias,
+            base_gpt.n_layers,
+            base_gpt.vocab_size,
+            base_gpt.block_size,
+            expert_block_size,
+            freeze_core,
+            base_gpt.dropout,
+            flash=base_gpt.flash,
+        ).load_state_dict(sd)
 
     def optim_groups(self, weight_decay: float = 1e-1):
         # Filter out those that do not require grad
