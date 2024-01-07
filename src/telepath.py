@@ -17,12 +17,12 @@ class TelepathConfig:
     pre_norm_affine: bool
     pre_norm_bias: bool
 
-    encoder_block_size: int
-    encoder_d_model: int
-    encoder_n_heads: int
-    encoder_n_layers: int
-    encoder_bias: bool
-    encoder_dropout: float
+    expert_encoder_block_size: int
+    expert_encoder_d_model: int
+    expert_encoder_n_heads: int
+    expert_encoder_n_layers: int
+    expert_encoder_bias: bool
+    expert_encoder_dropout: float
 
     tokenizer_path: str
     pretrained_gpt: str
@@ -133,19 +133,24 @@ class Telepath(nn.Module):
         )
 
         self.encoder_proj = nn.Linear(
-            config.n_channels, config.encoder_d_model, bias=config.encoder_bias
+            config.n_channels,
+            config.expert_encoder_d_model,
+            bias=config.expert_encoder_bias,
         )
 
         self.encoder = AttentionEncoder(
-            block_size=config.encoder_block_size,
-            d_model=config.encoder_d_model,
-            n_heads=config.encoder_n_heads,
-            bias=config.encoder_bias,
-            dropout=config.encoder_dropout,
-            n_layers=config.encoder_n_layers,
+            block_size=config.expert_encoder_block_size,
+            d_model=config.expert_encoder_d_model,
+            n_heads=config.expert_encoder_n_heads,
+            bias=config.expert_encoder_bias,
+            dropout=config.expert_encoder_dropout,
+            n_layers=config.expert_encoder_n_layers,
         )
 
-        self.decoder = ExpertGPT.from_pretrained(model_type=config.pretrained_gpt)
+        self.decoder = ExpertGPT.from_pretrained(
+            model_type=config.pretrained_gpt,
+            expert_block_size=config.expert_encoder_block_size,
+        )
         self.decoder.crop_block_size(config.gpt_block_size)
 
         self.start_token = config.gpt_start_token

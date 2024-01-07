@@ -300,8 +300,6 @@ class GPT(nn.Module):
             (r"lm_head.weight", r"lm_head.weight"),
         )
         override_args = override_args or {}  # default to empty dict
-        # only dropout can be overridden see more notes below
-        assert all(k == "dropout" for k in override_args)
         from transformers import GPT2LMHeadModel
 
         print("Loading weights from pretrained gpt: %s" % model_type)
@@ -318,10 +316,11 @@ class GPT(nn.Module):
         config_args["block_size"] = 1024  # always 1024 for GPT model checkpoints
         config_args["bias"] = bool(True)  # always True for GPT model checkpoints
         config_args["dropout"] = 0.1
-        # we can override the dropout rate, if desired
-        if "dropout" in override_args:
-            print(f"overriding dropout rate to {override_args['dropout']}")
-            config_args["dropout"] = override_args["dropout"]
+        for k, v in override_args.items():
+            if v is None:
+                config_args.pop(k)
+            else:
+                config_args[k] = v
         # create a from-scratch initialized GPT model
         model = cls(**config_args)  # type: ignore
         sd = model.state_dict()
@@ -412,7 +411,6 @@ class ExpertGPT(GPT):
         vocab_size: int,
         block_size: int,
         expert_block_size: int,
-        freeze_core: bool,
         dropout: float,
         flash: bool = True,
     ):
@@ -436,8 +434,7 @@ class ExpertGPT(GPT):
                 dropout,
                 flash,
             )
-
-        self.freeze_core = freeze_core
+        self.expert_block_size = expert_block_size
 
     def forward(
         self,
@@ -467,23 +464,10 @@ class ExpertGPT(GPT):
         cls,
         model_type: str,
         expert_block_size: int,
-        freeze_core: bool,
         override_args=None,
-    ):
-        base_gpt = super().from_pretrained(model_type, override_args)
-        sd = base_gpt.state_dict()
-        return cls(
-            base_gpt.n_heads,
-            base_gpt.d_model,
-            base_gpt.bias,
-            base_gpt.n_layers,
-            base_gpt.vocab_size,
-            base_gpt.block_size,
-            expert_block_size,
-            freeze_core,
-            base_gpt.dropout,
-            flash=base_gpt.flash,
-        ).load_state_dict(sd)
+    ) -> "ExpertGPT":
+        override_args = (override_args or {}) | {"expert_block_size": expert_block_size}
+        return super().from_pretrained(model_type, override_args)
 
     def optim_groups(self, weight_decay: float = 1e-1):
         # Filter out those that do not require grad
@@ -491,7 +475,7 @@ class ExpertGPT(GPT):
         param_dict = {
             pn: p
             for pn, p in self.named_parameters()
-            if p.requires_grad and not (self.freeze_core and "expert" not in pn)
+            if p.requires_grad and not (self.freeze_gpt and "expert" not in pn)
         }
         # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
         # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
