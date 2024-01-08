@@ -175,7 +175,8 @@ class GPT(nn.Module):
         if not inference:
             logits: torch.Tensor = self.lm_head(x)
         else:
-            # Return logits for final token of each sequence. Nesting the last dim in a list ensures that it is not flattened.
+            # Return logits for final token of each sequence.
+            # Nesting the `-1` is the same as x[:, -1, :].unsqueeze(-1); when you slice into a nd tensor with a specific rank index i, you callapse the ith rank by default.
             logits: torch.Tensor = self.lm_head(x[:, [-1]])
         return logits
 
@@ -452,11 +453,13 @@ class ExpertGPT(GPT):
         for block in self.transformer.blocks:
             x = block(x)
         x = self.transformer.ln_f(x)
+
         if not inference:
             logits: torch.Tensor = self.lm_head(x[:, self.expert_block_size :, :])
         else:
-            # Return logits for final token of each sequence. Nesting the last dim in a list ensures that it is not flattened.
-            logits: torch.Tensor = self.lm_head(x[:, [-1]])
+            # Return logits for final token of each sequence.
+            # Nesting the `-1` is the same as x[:, -1, :].unsqueeze(-1); when you slice into a nd tensor with a specific rank index i, you callapse the ith rank by default.
+            logits: torch.Tensor = self.lm_head(x[:, [-1], :])
         return logits
 
     @classmethod

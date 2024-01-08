@@ -79,7 +79,7 @@ class TelepathWrapper:
         batch: dict[str, torch.Tensor],
     ) -> torch.Tensor:
         eeg, tokens = batch["eeg"], batch["input_ids"]
-        logits = self.model(eeg, tokens)[:, eeg.size(-2) :, :].clone()
+        logits = self.model(eeg, tokens).clone()
         loss = self.model.decoder.loss(logits, tokens)
         return loss
 

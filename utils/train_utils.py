@@ -140,9 +140,10 @@ def get_accuracy(
         true_text = true_text.lower().strip()
         pred_text = pred_text.lower().strip()
         # Using `in` allows to account for noise in the generation at the expense of speed.
-        if true_text in pred_text or any(
-            [synonym in pred_text for synonym in SYNONYM_MAP[true_text]]
-        ):
+        pred_text_is_synonym = any(
+            [synonym in pred_text for synonym in SYNONYM_MAP.get("true_text") or []]
+        )
+        if true_text in pred_text or pred_text_is_synonym:
             accuracy += 1 / len(batch_pred_text)
     return accuracy
 
