@@ -15,6 +15,7 @@ This project exists in orbit around one fundamental question: to what extent can
         - [x] Naiive accuracy on object generation.
         - [x] Flexible accruracy (Capitalisations, synonyms; just decode and use string matching)
         - [ ] Semantic Similarity on object generations
+    - [ ] Formalise trainable parameter counter and logging.
 - [ ] Architecture Ideas
     - [ ] COGVLM style neural decoder-only model: https://arxiv.org/pdf/2311.03079.pdf
         - [x] Expert Block

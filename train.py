@@ -36,7 +36,7 @@ parser.add_argument("--device", type=str)
 
 NUM_EPOCHS = 5
 BATCH_SIZE = 32
-MICRO_BATCH_SIZE = 32
+MICRO_BATCH_SIZE = 4
 VALIDATION_INTERVAL = 0.1
 LOG_INTERVAL = 1
 
@@ -119,7 +119,6 @@ def main(
             MetricLogRule.MANUAL,
             reset=True,
             suffixes=["step", "epoch"],
-            hidden=True,
         ),
     )
     metrics["lr"].value = lr_scheduler.get_last_lr()[0]
