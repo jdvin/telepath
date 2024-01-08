@@ -36,6 +36,7 @@ This project exists in orbit around one fundamental question: to what extent can
                 - [x] create a test GPT which overrides forward with a deterministic computation and ensure the array slicing works correctly
             - [ ] weight freezing
                 - [ ] are only expert params trainable
+    - [ ] Signal-to-codex encoder (https://openreview.net/pdf?id=WaLI8slhLw)
     - [ ] Pretrained encoder
     - [ ] Conv layers?
 - [ ] Interp
@@ -49,6 +50,7 @@ This project exists in orbit around one fundamental question: to what extent can
 - [ ] Training
     - [ ] DPO where negative preferences are selected stochastically from low semantic similarity objects
 - [ ] Datasets
+    - [ ] Slight more rigourous (read existant) data cleaning
     - [ ] Data Augmentations
         - [ ] Duplicate rows with synoynms
         - [ ] Similate noise associated with eeg to create augmented rows.
