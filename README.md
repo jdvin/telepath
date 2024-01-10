@@ -37,6 +37,8 @@ This project exists in orbit around one fundamental question: to what extent can
                 - [x] create a test GPT which overrides forward with a deterministic computation and ensure the array slicing works correctly
             - [ ] weight freezing
                 - [ ] are only expert params trainable
+        - [ ] better base model
+          - [ ] phi-2?
     - [ ] Signal-to-codex encoder (https://openreview.net/pdf?id=WaLI8slhLw)
     - [ ] Pretrained encoder
     - [ ] Conv layers?
