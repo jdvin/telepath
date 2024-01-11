@@ -29,6 +29,7 @@ parser.add_argument("--model_config_path", type=str, required=True)
 parser.add_argument("--optimizer_config_path", type=str, required=True)
 parser.add_argument("--dataset_path", type=str)
 parser.add_argument("--add_transform", action="store_true")
+parser.add_argument("--eval_first", action="store_true")
 parser.add_argument("--max_length", type=int)
 parser.add_argument("--num_channels", type=int)
 parser.add_argument("--num_samples", type=int)
@@ -36,7 +37,7 @@ parser.add_argument("--device", type=str)
 
 NUM_EPOCHS = 5
 BATCH_SIZE = 32
-MICRO_BATCH_SIZE = 4
+MICRO_BATCH_SIZE = 1
 VALIDATION_INTERVAL = 0.1
 LOG_INTERVAL = 1
 
@@ -46,6 +47,7 @@ def main(
     run_group: str,
     dataset_path: str,
     add_transform: bool,
+    eval_first: bool,
     max_length: int,
     num_channels: int,
     num_samples: int,
@@ -135,7 +137,8 @@ def main(
     assert not os.path.isdir(f"checkpoints/{run_name}")
     os.makedirs(f"checkpoints/{run_name}")
 
-    run_eval(wmodel=wmodel, val_dataloader=val_dataloader, metrics=metrics)
+    if eval_first:
+        run_eval(wmodel=wmodel, val_dataloader=val_dataloader, metrics=metrics)
 
     wandb.init(project="telepath", group=run_group, name=run_name, config=config)
     while True:
@@ -186,15 +189,4 @@ def main(
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    main(
-        run_name=args.run_name,
-        run_group=args.run_group,
-        dataset_path=args.dataset_path,
-        add_transform=args.add_transform,
-        max_length=args.max_length,
-        num_channels=args.num_channels,
-        num_samples=args.num_samples,
-        model_config_path=args.model_config_path,
-        optimizer_config_path=args.optimizer_config_path,
-        device=args.device,
-    )
+    main(**vars(args))
