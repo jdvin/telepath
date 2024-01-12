@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 from json import encoder
 
+import numpy as np
 import torch
-from torch import nn
+from torch import nn, Tensor
+import torch.nn.functional as F
 import yaml
 
 from .gpt import GPT, ExpertGPT
@@ -43,6 +45,18 @@ class WaveNetEncoder(nn.Module):
     pass
 
 
+def sinusoids(length: int, channels: int, max_timescale: int):
+    """Returns sinusoids for positional embedding
+
+    Taken from Whisper implementation: https://github.com/openai/whisper/blob/ba3f3cd54b0e5b8ce1ab3de13e32122d0d5f98ab/whisper/model.py
+    """
+    assert channels % 2 == 0
+    log_timescale_increment = np.log(max_timescale) / (channels // 2 - 1)
+    inv_timescales = torch.exp(-log_timescale_increment * torch.arange(channels // 2))
+    scaled_time = torch.arange(length)[:, np.newaxis] * inv_timescales[np.newaxis, :]
+    return torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=1)
+
+
 class AttentionEncoderBlock(nn.Module):
     def __init__(
         self, block_size: int, d_model: int, n_heads: int, bias: bool, dropout: float
@@ -68,15 +82,16 @@ class AttentionEncoderBlock(nn.Module):
             nn.Linear(4 * d_model, d_model),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         x = x + self.attn(self.ln_1(x))
         x = x + self.mlp(self.ln_2(x))
         return x
 
 
-class AttentionEncoder(nn.Module):
+class NeuralEncoder(nn.Module):
     def __init__(
         self,
+        n_input_channels: int,
         block_size: int,
         d_model: int,
         n_heads: int,
@@ -85,14 +100,23 @@ class AttentionEncoder(nn.Module):
         n_layers: int,
     ):
         super().__init__()
-        self.layers = nn.ModuleList(
+        self.conv1 = nn.Conv1d(
+            in_channels=n_input_channels, out_channels=d_model, kernel_size=3
+        )
+        self.conv2 = nn.Conv1d(
+            in_channels=d_model, out_channels=d_model, kernel_size=3, dilation=2
+        )
+
+        self.blocks = nn.ModuleList(
             AttentionEncoderBlock(block_size, d_model, n_heads, bias, dropout)
             for _ in range(n_layers)
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        for layer in self.layers:
-            x = layer(x)
+    def forward(self, x: Tensor) -> Tensor:
+        x = F.gelu(self.conv1(x))
+        x = F.gelu(self.conv2(x))
+        for block in self.blocks:
+            x = block(x)
         return x
 
     def optim_groups(self, weight_decay: float = 1e-1) -> list[dict[str, str]]:
@@ -132,13 +156,8 @@ class Telepath(nn.Module):
             bias=config.pre_norm_bias,
         )
 
-        self.encoder_proj = nn.Linear(
-            config.n_channels,
-            config.expert_encoder_d_model,
-            bias=config.expert_encoder_bias,
-        )
-
-        self.encoder = AttentionEncoder(
+        self.encoder = NeuralEncoder(
+            n_input_channels=config.n_channels,
             block_size=config.expert_encoder_block_size,
             d_model=config.expert_encoder_d_model,
             n_heads=config.expert_encoder_n_heads,
@@ -156,7 +175,7 @@ class Telepath(nn.Module):
         self.start_token = config.gpt_start_token
         self.stop_token = config.gpt_stop_token
 
-    def forward(self, eeg: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
+    def forward(self, eeg: Tensor, input_ids: Tensor) -> Tensor:
         """Forward pass through the Telepath model.
 
         Attributes:
@@ -170,7 +189,7 @@ class Telepath(nn.Module):
 
     @torch.no_grad()
     def generate(
-        self, eeg: torch.Tensor, device: str, stop_token: int | None = None
+        self, eeg: Tensor, device: str, stop_token: int | None = None
     ) -> list[list[int]]:
         """Generate a sequence of tokens given an EEG signal.
         Attributes:
