@@ -45,7 +45,7 @@ class WaveNetEncoder(nn.Module):
     pass
 
 
-def sinusoids(length: int, channels: int, max_timescale: int):
+def sinusoids(length: int, channels: int, max_timescale: int = 1000):
     """Returns sinusoids for positional embedding
 
     Taken from Whisper implementation: https://github.com/openai/whisper/blob/ba3f3cd54b0e5b8ce1ab3de13e32122d0d5f98ab/whisper/model.py
@@ -106,6 +106,7 @@ class NeuralEncoder(nn.Module):
         self.conv2 = nn.Conv1d(
             in_channels=d_model, out_channels=d_model, kernel_size=3, dilation=2
         )
+        self.register_buffer("positional_embedding", sinusoids(block_size, d_model))
 
         self.blocks = nn.ModuleList(
             AttentionEncoderBlock(block_size, d_model, n_heads, bias, dropout)
