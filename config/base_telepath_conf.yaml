@@ -3,6 +3,13 @@ pre_norm_shift: true
 pre_norm_scale: true
 pre_norm_affine: false
 pre_norm_bias: false
+expert_encoder_conv1_kernel_size: 3
+expert_encoder_conv1_padding: 1
+expert_encoder_conv1_dilation: 0
+expert_encoder_conv2_kernel_size: 3
+expert_encoder_conv2_padding: 1
+expert_encoder_conv2_dilation: 0
+expert_encoder_n_input_samples: 100
 expert_encoder_block_size: 100
 expert_encoder_d_model: 1280 
 expert_encoder_n_heads: 16

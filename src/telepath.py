@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from json import encoder
+import math
 
 import numpy as np
 import torch
@@ -19,6 +20,14 @@ class TelepathConfig:
     pre_norm_affine: bool
     pre_norm_bias: bool
 
+    expert_encoder_conv1_kernel_size: int
+    expert_encoder_conv1_padding: int
+    expert_encoder_conv1_dilation: int
+    expert_encoder_conv2_kernel_size: int
+    expert_encoder_conv2_padding: int
+    expert_encoder_conv2_dilation: int
+
+    expert_encoder_n_input_samples: int
     expert_encoder_block_size: int
     expert_encoder_d_model: int
     expert_encoder_n_heads: int
@@ -92,6 +101,13 @@ class NeuralEncoder(nn.Module):
     def __init__(
         self,
         n_input_channels: int,
+        n_input_samples: int,
+        conv1_kernel_size: int,
+        conv1_padding: int,
+        conv1_dilation: int,
+        conv2_kernel_size: int,
+        conv2_padding: int,
+        conv2_dilation: int,
         block_size: int,
         d_model: int,
         n_heads: int,
@@ -99,12 +115,40 @@ class NeuralEncoder(nn.Module):
         dropout: float,
         n_layers: int,
     ):
+        # Formula from https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
+        conv1_out_samples = math.ceil(
+            (
+                n_input_samples
+                + 2 * conv1_padding
+                - conv1_dilation * (conv1_kernel_size - 1)
+                - 1
+            )
+            + 1
+        )
+        conv2_out_samples = math.ceil(
+            (
+                conv1_out_samples
+                + 2 * conv2_padding
+                - conv2_dilation * (conv2_kernel_size - 1)
+                - 1
+            )
+            + 1
+        )
+        assert (
+            conv2_out_samples == block_size
+        ), f"Number of output samples of conv2 ({conv2_out_samples}) - inferred from conv1 output samples ({conv1_out_samples}) - must match block size ({block_size})."
         super().__init__()
         self.conv1 = nn.Conv1d(
-            in_channels=n_input_channels, out_channels=d_model, kernel_size=3
+            in_channels=n_input_channels,
+            out_channels=d_model,
+            kernel_size=conv1_kernel_size,
+            dilation=conv1_dilation,
         )
         self.conv2 = nn.Conv1d(
-            in_channels=d_model, out_channels=d_model, kernel_size=3, dilation=2
+            in_channels=d_model,
+            out_channels=d_model,
+            kernel_size=conv2_kernel_size,
+            dilation=conv2_dilation,
         )
         self.register_buffer("positional_embedding", sinusoids(block_size, d_model))
 
@@ -116,6 +160,7 @@ class NeuralEncoder(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         x = F.gelu(self.conv1(x))
         x = F.gelu(self.conv2(x))
+        x = (x + self.positional_embedding).to(x.dtype)
         for block in self.blocks:
             x = block(x)
         return x
@@ -159,6 +204,7 @@ class Telepath(nn.Module):
 
         self.encoder = NeuralEncoder(
             n_input_channels=config.n_channels,
+            n_input_samples=config.expert_encoder_n_input_samples,
             block_size=config.expert_encoder_block_size,
             d_model=config.expert_encoder_d_model,
             n_heads=config.expert_encoder_n_heads,
