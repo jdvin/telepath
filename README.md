@@ -41,7 +41,10 @@ This project exists in orbit around one fundamental question: to what extent can
           - [ ] phi-2?
     - [ ] Signal-to-codex encoder (https://openreview.net/pdf?id=WaLI8slhLw)
     - [ ] Pretrained encoder
-    - [ ] Conv layers?
+        - [ ] use whisper!
+            - [ ] load conv layers into conv2ds where the conv1d weight layer is repeated down the second dim for intitialisation for as many eeg chanels as there are (so we do not have to shift across the second dim, collapsing the output to the same shape as the conv1d)
+            - use https://huggingface.co/datasets/DavidVivancos/MindBigData2022_Imagenet_IN as a POC - will have to create the spectrograms 
+
 - [ ] Interp
     - [ ] Similarity of neural-expert-query to target-token-key vectors.
 - [ ] Optimisatons
@@ -51,7 +54,7 @@ This project exists in orbit around one fundamental question: to what extent can
     - [ ] Multiple eval data loaders
     - [ ] Multi-worker dataloader.
 - [ ] Training
-    - [ ] DPO where negative preferences are selected stochastically from low semantic similarity objects
+    - [ ] DPO (or clip) where negative preferences are selected stochastically from low semantic similarity objects
 - [ ] Datasets
     - [ ] Slight more rigourous (read existant) data cleaning
     - [ ] Data Augmentations
