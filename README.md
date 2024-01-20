@@ -43,7 +43,9 @@ This project exists in orbit around one fundamental question: to what extent can
     - [ ] Pretrained encoder
         - [ ] use whisper!
             - [ ] load conv layers into conv2ds where the conv1d weight layer is repeated down the second dim for intitialisation for as many eeg chanels as there are (so we do not have to shift across the second dim, collapsing the output to the same shape as the conv1d)
-            - use https://huggingface.co/datasets/DavidVivancos/MindBigData2022_Imagenet_IN as a POC - will have to create the spectrograms 
+                - [ ] if we are having trouble getting each kernel to channel specialise to a degree, then we could have a conv1d for each channel that outputs a d_model/n_channels block. but the 2d option is probably better as it can learn spatial filters between channels
+            - [ ] use https://huggingface.co/datasets/DavidVivancos/MindBigData2022_Imagenet_IN as a POC - will have to create the spectrograms 
+        
 
 - [ ] Interp
     - [ ] Similarity of neural-expert-query to target-token-key vectors.
