@@ -1,16 +1,21 @@
+from copy import deepcopy
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 import math
-from typing import Any
+from typing import Any, Iterator
+import os
 import random
 
-import yaml
-import wandb
-from tqdm import tqdm
+from datasets import DatasetDict
 import torch
+from torch.utils.data import DataLoader, Sampler, DistributedSampler
+from torch.distributed import ReduceOp, all_reduce, barrier
+from tqdm import tqdm
 import pandas as pd
+import wandb
+import yaml
 
-from src.wrapper import TelepathWrapper
+from ..src.wrapper import TelepathWrapper
 
 THINGS_CONCEPTS_PATH = "data/things_concepts.csv"
 SYNONYM_MAP = {
@@ -25,16 +30,30 @@ SYNONYM_MAP = {
 }
 
 
+def get_microbatch(
+    dataloader_iterator: Iterator,
+    device: str | int,
+) -> dict[str, torch.Tensor]:
+    micro_batch = next(dataloader_iterator)
+    return {
+        k: v.pin_memory().to(device, non_blocking=True) for k, v in micro_batch.items()
+    }
+
+
 class MetricLogRule(Enum):
     EVERY_STEP = "every_step"
     ON_CHANGE = "on_change"
     MANUAL = "manual"
 
 
+def load_yaml(path: str) -> dict:
+    with open(path, "r") as f:
+        config = yaml.safe_load(f)
+    return config
+
+
 @dataclass
 class Metric:
-    """I'm in the arena, trying things."""
-
     value: Any
     _update_rule: MetricLogRule
     _log: bool = False
@@ -46,18 +65,89 @@ class Metric:
 
     def __post_init__(self):
         if self.reset:
-            self._reset_value = self.value
+            self._reset_value = deepcopy(self.value)
 
 
-def log_metrics(metrics: dict[str, Metric]):
+def setup(
+    rank: int,
+    world_size: int,
+    logger: Any,
+    run_group: str,
+    run_name: str,
+    config: Any,
+):
+    torch.manual_seed(42 + rank)
+    random.seed(42 + rank)
+    torch.cuda.set_device(rank)
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
+    if rank != 0:
+        logger.remove()
+    else:
+        if not os.path.isdir("checkpoints"):
+            os.makedirs("checkpoints")
+        assert not os.path.isdir(f"checkpoints/{run_name}")
+        os.makedirs(f"checkpoints/{run_name}")
+        wandb.init(
+            project="paraverbal-whisper",
+            group=run_group,
+            name=run_name,
+            config=asdict(config),
+        )
+    if world_size > 1:
+        torch.distributed.init_process_group("nccl", rank=rank, world_size=world_size)
+
+
+def cleanup(world_size: int):
+    if world_size > 1:
+        torch.distributed.destroy_process_group()
+
+
+def format_number(number: int) -> str:
+    if number < 1_000:
+        return str(number)
+    if number < 1_000_000:
+        return f"{number / 1_000:.2f}K"
+    if number < 1_000_000_000:
+        return f"{number / 1_000_000:.2f}M"
+    return f"{number / 1_000_000_000:.2f}B"
+
+
+def count_params(model: torch.nn.Module) -> dict[str, str]:
+    trained = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    untrained = sum(p.numel() for p in model.parameters() if not p.requires_grad)
+    return {
+        "Trained": format_number(trained),
+        "Untrained": format_number(untrained),
+        "Total": format_number(trained + untrained),
+    }
+
+
+def get_validation_step_indexes(
+    validation_interval: float, steps_per_epoch: int
+) -> set[int]:
+    assert 1 >= validation_interval > 0
+    steps_per_validation = math.ceil(validation_interval * steps_per_epoch)
+    validation_step_indexes = set(
+        range(steps_per_validation, steps_per_epoch + 1, steps_per_validation)
+    )
+    if steps_per_validation % steps_per_epoch == 0:
+        validation_step_indexes.add(steps_per_epoch)
+    return validation_step_indexes
+
+
+def log_metrics(metrics: dict[str, Metric], rank: int, is_distributed: bool) -> None:
     log_metrics = {}
     for key, metric in metrics.items():
         if (
+            # If we log the metric every step.
             metric._update_rule == MetricLogRule.EVERY_STEP
+            # Or, if log on change and the metric has changed.
             or (
                 metric._update_rule == MetricLogRule.ON_CHANGE
                 and metric.value != metric._past
             )
+            # Or, if we manually want to log the metric and the flag is set.
             or (metric._update_rule == MetricLogRule.MANUAL and metric._log)
         ):
             metric._log = False
@@ -66,54 +156,88 @@ def log_metrics(metrics: dict[str, Metric]):
             # If we want they key to change dynamically each time it gets logged (e.g., if we want to keep track of how a table will change over time).
             if metric.suffixes:
                 key = f"{key}_{'_'.join([suffix + str(metrics[suffix].value) for suffix in metric.suffixes])}"
+            # Tensor values are needed to simplify logging for distributed training, but we do not log them.
+            if isinstance(metric.value, torch.Tensor):
+                if is_distributed:
+                    all_reduce(metric.value, op=ReduceOp.AVG)
+                metric.value = metric.value.item()
+
             log_metrics[key] = metric.value
             if metric.reset:
-                metric.value = metric._reset_value
-
+                metric.value = deepcopy(metric._reset_value)
+    if rank != 0:
+        return
     wandb.log(log_metrics)
 
 
-class DataLoader:
-    def __init__(self, dataset, batch_size: int, device: str, shuffle: bool = True):
-        self.dataset = dataset
-        self.batch_size = batch_size
-        self.shuffle = shuffle
-        self.device = device
-        self.num_batches = math.ceil(len(dataset) / batch_size)
-        self.i = 0
-
-    def reset(self):
-        self.i = 0
-        self.batch_indexes = list(range(self.num_batches))
-        if self.shuffle:
-            random.shuffle(self.batch_indexes)
-
-    def get_batch(self):
-        if self.i % self.num_batches == 0:
-            self.reset()
-        batch = self.dataset[self.i * self.batch_size : (self.i + 1) * self.batch_size]
-        self.i += 1
-
-        for key, value in batch.items():
-            # TODO: This loop pattern probably stops us from being able to take advantage of the non-blocking device movement.
-            if "cuda" in self.device:
-                batch[key] = value.pin_memory().to(self.device, non_blocking=True)
-            else:
-                batch[key] = value.to(self.device)
-        return batch
-
-    def __iter__(self):
-        for _ in range(self.num_batches):
-            yield self.get_batch()
-
-    def __len__(self):
-        return self.num_batches
+def get_dataloaders(
+    dataset: DatasetDict, microbatch_size: int, rank: int, world_size: int
+) -> tuple[DataLoader, Sampler | None, DataLoader, Sampler | None]:
+    if world_size > 1:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(
+            dataset["train"], num_replicas=world_size, rank=rank, shuffle=True
+        )
+        val_sampler = torch.utils.data.distributed.DistributedSampler(
+            dataset["test"], num_replicas=world_size, rank=rank, shuffle=True
+        )
+    else:
+        train_sampler, val_sampler = None, None
+    train_dataloader = DataLoader(
+        dataset["train"],  # type: ignore
+        batch_size=microbatch_size,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
+    )
+    val_dataloader = DataLoader(
+        dataset["test"],  # type: ignore
+        batch_size=microbatch_size,
+        shuffle=val_sampler is None,
+        sampler=val_sampler,
+    )
+    return train_dataloader, train_sampler, val_dataloader, val_sampler
 
 
-def load_yaml(path: str):
-    with open(path, "r") as f:
-        config = yaml.safe_load(f)
-    return config
+def get_dataloader_iterator(
+    dataloader: DataLoader, sampler: Sampler | None, epoch: int
+) -> Iterator:
+    if isinstance(sampler, DistributedSampler):
+        # Required to ensure that the order is different each epoch.
+        sampler.set_epoch(epoch)
+    return iter(dataloader)
+
+
+@torch.no_grad()
+def run_eval(
+    model: torch.nn.Module,
+    val_dataloader: DataLoader,
+    val_sampler: Sampler | None,
+    metrics: dict[str, Metric],
+    device: str | int,
+):
+    val_pbar = tqdm(
+        total=len(val_dataloader),
+        desc="Running validation",
+        leave=False,
+        disable=device not in {0, "cuda:0"},
+    )
+    val_dataloader_iterator = iter(val_dataloader)
+    val_dataloader_iterator = get_dataloader_iterator(
+        val_dataloader, val_sampler, metrics["epoch"].value
+    )
+
+    for _ in range(len(val_dataloader)):
+        micro_batch = get_microbatch(val_dataloader_iterator, device)
+        loss, logits = model.step(micro_batch)
+        # TODO: This is slightly mathematically incorrect for batches that are not the same size re: simpsons paradox.
+        # If the val dataloader shuffles each eval cycle, then it should average out lol.
+        metrics["val_loss"].value += loss / len(val_dataloader)
+        metrics["val_accuracy"].value += model.classifier_head.get_accuracy(
+            logits, micro_batch["labels"]
+        ) / len(val_dataloader)
+        val_pbar.update()
+
+    metrics["val_loss"]._log = True
+    metrics["val_accuracy"]._log = True
 
 
 @torch.no_grad()
@@ -142,23 +266,3 @@ def get_accuracy(
         if true_text in pred_text or pred_text_is_synonym:
             accuracy += 1 / len(batch_pred_text)
     return accuracy
-
-
-@torch.no_grad()
-def run_eval(
-    wmodel: TelepathWrapper, val_dataloader: DataLoader, metrics: dict[str, Metric]
-):
-    metrics["val_loss"].value = 0
-    metrics["val_accuracy"].value = 0
-    val_pbar = tqdm(total=len(val_dataloader), desc="Running validation")
-    for k, micro_batch in enumerate(val_dataloader):
-        metrics["val_loss"].value += wmodel.step(micro_batch).item() / len(
-            val_dataloader
-        )
-        metrics["val_accuracy"].value += get_accuracy(
-            micro_batch, wmodel, metrics
-        ) / len(val_dataloader)
-        val_pbar.update()
-    metrics["val_loss"]._log = True
-    metrics["val_accuracy"]._log = True
-    metrics["generations"]._log = True

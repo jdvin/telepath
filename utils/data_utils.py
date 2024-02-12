@@ -1,15 +1,17 @@
 import argparse
-import enum
+from enum import Enum
+import os
 import random
 from typing import Callable, Any
 
 import datasets
 import pandas as pd
 import torch
+from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
 
 
-class ValidationType(enum.Enum):
+class ValidationType(Enum):
     RANDOM = "random"
     SUBJECT = "subject"
     OBJECT = "object"
@@ -24,6 +26,126 @@ parser.add_argument("--max_length", type=int)
 parser.add_argument("--num_channels", type=int)
 parser.add_argument("--num_samples", type=int)
 parser.add_argument("--output_path", type=str)
+
+ELECTRODE_ORDER = np.array(
+    [
+        "Fp1",
+        "F3",
+        "F7",
+        "FT9",
+        "FC5",
+        "FC1",
+        "C3",
+        "T7",
+        "TP9",
+        "CP5",
+        "CP1",
+        "Pz",
+        "P3",
+        "P7",
+        "O1",
+        "Oz",
+        "O2",
+        "P4",
+        "P8",
+        "TP10",
+        "CP6",
+        "CP2",
+        "Cz",
+        "C4",
+        "T8",
+        "FT10",
+        "FC6",
+        "FC2",
+        "F4",
+        "F8",
+        "Fp2",
+        "AF7",
+        "AF3",
+        "AFz",
+        "F1",
+        "F5",
+        "FT7",
+        "FC3",
+        "FCz",
+        "C1",
+        "C5",
+        "TP7",
+        "CP3",
+        "P1",
+        "P5",
+        "PO7",
+        "PO3",
+        "POz",
+        "PO4",
+        "PO8",
+        "P6",
+        "P2",
+        "CPz",
+        "CP4",
+        "TP8",
+        "C6",
+        "C2",
+        "FC4",
+        "FT8",
+        "F6",
+        "F2",
+        "AF4",
+        "AF8",
+    ]
+)
+
+
+class ThingsDataset(Dataset):
+    def __init__(
+        self,
+        root_dir: str,
+        subjects: list[int] | range,
+        validation_type: ValidationType,
+        epoch_start: int = 0,
+        epoch_end: int = 200,
+    ):
+        """This is going to be a doozy."""
+        self.ds_str = (
+            "".join([str(sub) for sub in subjects])
+            + validation_type.value
+            + str(epoch_start)
+            + str(epoch_end)
+        )
+
+        things_metadata = pd.read_csv(f"{root_dir}/things_concepts.csv")
+        # Keys are coded: `{split_type}_img_concepts_THINGS`.
+        eeg_img_metadata = {
+            key.split("_")[0]: value
+            for key, value in np.load(
+                f"{root_dir}/image_metadata.npy", allow_pickle=True
+            ).all()
+            if "THINGS" in key
+        }
+
+        self.root_dir = root_dir
+        self.subjects = subjects
+        self.validation_type = validation_type
+        for sub in subjects:
+            for ses in range(1, 5):
+                for split_type in ["train", "test"]:
+                    path = os.path.join(
+                        root_dir,
+                        f"sub-{'0' if sub > 9 else ''}{sub}",
+                        f"ses-0{ses}",
+                        f"raw_eeg_{file_type}.npy",
+                    )
+                    data = np.load(path).all()
+                    stim_index = data["ch_types"].index("stim")
+                    ch_names = np.array(
+                        [name for name in data["ch_names"] if name != "stim"]
+                    )
+                    # Ensure the order of the electrode order is consistent.
+                    # This may be overkill but it is very important, so worth being sure about.
+                    _, ordered_electrode_indexes = np.where(
+                        ELECTRODE_ORDER[:, None] == ch_names
+                    )
+                    data = data["raw_eeg_data"][electrode_order_indexes, :]
 
 
 def get_transform(
@@ -74,24 +196,6 @@ def get_transform(
         return transformed_batch
 
     return transform
-
-
-# def get_append_synonyms(
-#     dataset: datasets.Dataset,
-#     synonyms_data_path: str,
-#     things_concepts_path: str = "data/things_concepts.csv",
-# ):
-#     # Load the map from object ID to word.
-#     things_concepts = pd.read_csv(things_concepts_path)
-
-#     object_id_to_synonyms = dict(
-#         zip(things_concepts["uniqueID"], things_concepts["WordNet Synonyms"])
-#     )
-
-#
-
-#     def append_synonyms(batch):
-#         # Duplicate each element in the batch, swapping the object for its synonym and append to `synonym_dataset`.
 
 
 def create_dataset(

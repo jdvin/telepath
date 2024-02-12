@@ -14,27 +14,7 @@ from .components import attention, norm
 
 @dataclass
 class TelepathConfig:
-    n_channels: int
-    pre_norm_shift: bool
-    pre_norm_scale: bool
-    pre_norm_affine: bool
-    pre_norm_bias: bool
-
-    expert_encoder_conv1_kernel_size: int
-    expert_encoder_conv1_padding: int
-    expert_encoder_conv1_dilation: int
-    expert_encoder_conv2_kernel_size: int
-    expert_encoder_conv2_padding: int
-    expert_encoder_conv2_dilation: int
-
-    expert_encoder_n_input_samples: int
-    expert_encoder_block_size: int
-    expert_encoder_d_model: int
-    expert_encoder_n_heads: int
-    expert_encoder_n_layers: int
-    expert_encoder_bias: bool
-    expert_encoder_dropout: float
-
+    pretrained_whisper: str
     tokenizer_path: str
     pretrained_gpt: str
     freeze_gpt: bool
@@ -97,7 +77,7 @@ class AttentionEncoderBlock(nn.Module):
         return x
 
 
-class NeuralEncoder(nn.Module):
+class NeuralWhisperEncoder(nn.Module):
     def __init__(
         self,
         n_input_channels: int,
@@ -115,40 +95,20 @@ class NeuralEncoder(nn.Module):
         dropout: float,
         n_layers: int,
     ):
-        # Formula from https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
-        conv1_out_samples = math.ceil(
-            (
-                n_input_samples
-                + 2 * conv1_padding
-                - conv1_dilation * (conv1_kernel_size - 1)
-                - 1
-            )
-            + 1
-        )
-        conv2_out_samples = math.ceil(
-            (
-                conv1_out_samples
-                + 2 * conv2_padding
-                - conv2_dilation * (conv2_kernel_size - 1)
-                - 1
-            )
-            + 1
-        )
-        assert (
-            conv2_out_samples == block_size
-        ), f"Number of output samples of conv2 ({conv2_out_samples}) - inferred from conv1 output samples ({conv1_out_samples}) - must match block size ({block_size})."
         super().__init__()
-        self.conv1 = nn.Conv1d(
+        self.conv1 = nn.Conv2d(
             in_channels=n_input_channels,
             out_channels=d_model,
             kernel_size=conv1_kernel_size,
             dilation=conv1_dilation,
+            padding=conv1_padding,
         )
-        self.conv2 = nn.Conv1d(
+        self.conv2 = nn.Conv2d(
             in_channels=d_model,
             out_channels=d_model,
             kernel_size=conv2_kernel_size,
             dilation=conv2_dilation,
+            padding=conv2_padding,
         )
         self.register_buffer("positional_embedding", sinusoids(block_size, d_model))
 
@@ -188,6 +148,10 @@ class NeuralEncoder(nn.Module):
         )
         return optim_groups
 
+    @classmethod
+    def from_pretrained(cls, model_id: str):
+        pass
+
 
 class Telepath(nn.Module):
     def __init__(self, config: TelepathConfig):
@@ -202,16 +166,7 @@ class Telepath(nn.Module):
             bias=config.pre_norm_bias,
         )
 
-        self.encoder = NeuralEncoder(
-            n_input_channels=config.n_channels,
-            n_input_samples=config.expert_encoder_n_input_samples,
-            block_size=config.expert_encoder_block_size,
-            d_model=config.expert_encoder_d_model,
-            n_heads=config.expert_encoder_n_heads,
-            bias=config.expert_encoder_bias,
-            dropout=config.expert_encoder_dropout,
-            n_layers=config.expert_encoder_n_layers,
-        )
+        self.encoder = NeuralWhisperEncoder.from_pretrained()
 
         self.decoder = ExpertGPT.from_pretrained(
             model_type=config.pretrained_gpt,
