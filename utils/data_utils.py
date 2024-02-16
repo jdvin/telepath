@@ -5,6 +5,7 @@ import random
 from typing import Callable, Any
 
 import datasets
+import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
@@ -115,8 +116,10 @@ class ThingsDataset(Dataset):
 
         things_metadata = pd.read_csv(f"{root_dir}/things_concepts.csv")
         # Keys are coded: `{split_type}_img_concepts_THINGS`.
+        # Values are coded arrays of strings each coded: `{index}_{object_id}`.
+        # The index is offset by +1 relative to THINGS probably because `0` is used as padding in the stim channel.
         eeg_img_metadata = {
-            key.split("_")[0]: value
+            key.split("_")[0]: [int(obj.split("_")[0]) - 1 for obj in value]
             for key, value in np.load(
                 f"{root_dir}/image_metadata.npy", allow_pickle=True
             ).all()
@@ -133,7 +136,7 @@ class ThingsDataset(Dataset):
                         root_dir,
                         f"sub-{'0' if sub > 9 else ''}{sub}",
                         f"ses-0{ses}",
-                        f"raw_eeg_{file_type}.npy",
+                        f"raw_eeg_{split_type}.npy",
                     )
                     data = np.load(path).all()
                     stim_index = data["ch_types"].index("stim")
@@ -145,7 +148,14 @@ class ThingsDataset(Dataset):
                     _, ordered_electrode_indexes = np.where(
                         ELECTRODE_ORDER[:, None] == ch_names
                     )
-                    data = data["raw_eeg_data"][electrode_order_indexes, :]
+                    # Get the true THINGS id...
+                    stims = np.array(
+                        [
+                            eeg_img_metadata[split_type][i] if i != 0 else i
+                            for i in data["raw_eeg_data"][stim_index, :]
+                        ]
+                    )
+                    data = data["raw_eeg_data"][ordered_electrode_indexes, :]
 
 
 def get_transform(
