@@ -72,8 +72,7 @@ ELECTRODE_ORDER = np.array(
         "C1",
         "C5",
         "TP7",
-        "CP3",
-        "P1",
+        "CP3" "P1",
         "P5",
         "PO7",
         "PO3",
@@ -106,7 +105,12 @@ class ThingsDataset(Dataset):
         epoch_start: int = 0,
         epoch_end: int = 200,
     ):
-        """This is going to be a doozy."""
+        """This is going to be a doozy.
+
+        This may look unecessarily verbose, but the goal here is to be able to go straight from the
+        the raw files as they were given to a dataset of desired structure.
+        That way, if the structure changes, it can just be reflected here, instead of having to do preprocessing each time.
+        """
         self.ds_str = (
             "".join([str(sub) for sub in subjects])
             + validation_type.value
@@ -122,7 +126,9 @@ class ThingsDataset(Dataset):
             key.split("_")[0]: [int(obj.split("_")[0]) - 1 for obj in value]
             for key, value in np.load(
                 f"{root_dir}/image_metadata.npy", allow_pickle=True
-            ).all()
+            )
+            .all()
+            .items()
             if "THINGS" in key
         }
 
@@ -134,11 +140,11 @@ class ThingsDataset(Dataset):
                 for split_type in ["train", "test"]:
                     path = os.path.join(
                         root_dir,
-                        f"sub-{'0' if sub > 9 else ''}{sub}",
+                        f"sub-{'0' if sub < 9 else ''}{sub}",
                         f"ses-0{ses}",
                         f"raw_eeg_{split_type}.npy",
                     )
-                    data = np.load(path).all()
+                    data = np.load(path, allow_pickle=True).all()
                     stim_index = data["ch_types"].index("stim")
                     ch_names = np.array(
                         [name for name in data["ch_names"] if name != "stim"]
@@ -149,13 +155,23 @@ class ThingsDataset(Dataset):
                         ELECTRODE_ORDER[:, None] == ch_names
                     )
                     # Get the true THINGS id...
+                    import pdb
+
+                    pdb.set_trace()
                     stims = np.array(
                         [
-                            eeg_img_metadata[split_type][i] if i != 0 else i
+                            (
+                                eeg_img_metadata[split_type][int(i)]
+                                if int(i) not in {0, 99999}
+                                else int(i)
+                            )
                             for i in data["raw_eeg_data"][stim_index, :]
                         ]
                     )
                     data = data["raw_eeg_data"][ordered_electrode_indexes, :]
+                    import pdb
+
+                    pdb.set_trace()
 
 
 def get_transform(
@@ -320,14 +336,17 @@ def get_dataset(
 
 
 if __name__ == "__main__":
-    args = parser.parse_args()
-    dataset = create_dataset(
-        datafiles=args.datafiles,
-        validation_type=args.validation_type,
-        pre_transform=args.pre_transform,
-        tokenizer=args.tokenizer,
-        max_length=args.max_length,
-        num_channels=args.num_channels,
-        num_samples=args.num_samples,
+    # args = parser.parse_args()
+    # dataset = create_dataset(
+    #     datafiles=args.datafiles,
+    #     validation_type=args.validation_type,
+    #     pre_transform=args.pre_transform,
+    #     tokenizer=args.tokenizer,
+    #     max_length=args.max_length,
+    #     num_channels=args.num_channels,
+    #     num_samples=args.num_samples,
+    # )
+    # dataset.save_to_disk(args.output_path)
+    ThingsDataset(
+        "data/things_eeg_100ms", subjects=[1], validation_type=ValidationType.RANDOM
     )
-    dataset.save_to_disk(args.output_path)
