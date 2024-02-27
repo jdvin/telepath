@@ -123,6 +123,17 @@ def count_params(model: torch.nn.Module) -> dict[str, str]:
     }
 
 
+def log_model_details(model: torch.nn.Module) -> None:
+    logger.info(f"Architecture:\n{model}")
+    param_counts = count_params(model)
+    logger.info(
+        "| "
+        + " | ".join(
+            [f"{key} Parameters: {value}" for key, value in param_counts.items()]
+        )
+    )
+
+
 def get_validation_step_indexes(
     validation_interval: float, steps_per_epoch: int
 ) -> set[int]:

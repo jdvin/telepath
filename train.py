@@ -2,29 +2,22 @@ import argparse
 from contextlib import nullcontext
 from dataclasses import asdict
 import math
-import os
-import random
-
 
 from datasets import load_from_disk, DatasetDict
 from loguru import logger
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.multiprocessing as torch_mp
-from torch import distributed as dist
-from torch.utils.data import DataLoader
 from torch.amp.autocast_mode import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
 from tqdm import tqdm
-import wandb
 
 from .utils.train_utils import (
     load_yaml,
     run_eval,
     setup,
     cleanup,
-    count_params,
-    format_number,
+    log_model_details,
     Metric,
     MetricLogRule,
     log_metrics,
@@ -33,20 +26,22 @@ from .utils.train_utils import (
     get_validation_step_indexes,
     get_dataloader_iterator,
 )
-from .src.telepath import Telepath
+
+from .src.telepath import Telepath, TelepathConfig
 
 parser = argparse.ArgumentParser()
 
 parser.add_argument("--run_name", type=str, required=True)
 parser.add_argument("--run_group", type=str, required=True)
+parser.add_argument("--model_config_path", type=str)
 parser.add_argument("--dataset_path", type=str)
 parser.add_argument("--eval_first", action="store_true")
 parser.add_argument("--device", type=str)
 parser.add_argument(
     "--dtype", type=str, choices=["fp32", "fp16", "bf16"], default="fp32"
 )
-parser.add_argument("--model_config_path", type=str, default=None)
 parser.add_argument("--world_size", type=int, default=1)
+parser.add_argument("--checkpoints", action="store_true", default=False)
 
 NUM_EPOCHS = 100
 BATCH_SIZE = 32
@@ -66,16 +61,14 @@ def main(
     eval_first: bool,
     device: str,
     dtype: str,
-    model_config_path: str | None,
+    model_config_path: str,
+    checkpoints: bool,
 ):
     assert BATCH_SIZE % MICRO_BATCH_SIZE == 0
     assert MICRO_BATCH_SIZE * world_size <= BATCH_SIZE
     grad_accum_steps = BATCH_SIZE // (MICRO_BATCH_SIZE * world_size)
 
-    if model_config_path:
-        config = WhisperClassifierConfig(**load_yaml(model_config_path))
-    else:
-        config = WhisperClassifierConfig()
+    config = TelepathConfig(**load_yaml(model_config_path))
 
     setup(rank, world_size, logger, run_group, run_name, config)
 
@@ -112,13 +105,9 @@ def main(
 
     logger.info("Creating model instance.")
     # Create model.
-    model = Telepath(config, device_id=rank).to(rank)
-    param_counts = count_params(model)
-    logger.info(
-        "Model parameter counts: "
-        + "| ".join([f"{key} = {value}" for key, value in param_counts.items()])
-    )
-
+    model = WhisperClassifier(config).to(rank)
+    logger.info(f"|Max LR: {MAX_LR} | Weight Decay: {WEIGHT_DECAY}|")
+    log_model_details(model)
     if world_size > 1:
         model = DDP(model, device_ids=[rank])
 
@@ -205,7 +194,7 @@ def main(
             log_metrics(metrics, rank, is_distributed=world_size > 1)
 
         if metrics["step"].value % steps_per_epoch == 0:
-            if rank == 0:
+            if rank == 0 and checkpoints:
                 torch.save(
                     model.module.state_dict(),
                     f"checkpoints/{run_name}/whisper_classifier_ep{metrics['epoch'].value}.pt",
@@ -255,6 +244,7 @@ if __name__ == "__main__":
                 args.device,
                 args.dtype,
                 args.model_config_path,
+                args.checkpoints,
             ),
             nprocs=args.world_size,
             join=True,
