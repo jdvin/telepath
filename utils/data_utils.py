@@ -102,8 +102,14 @@ ELECTRODE_ORDER = np.array(
 SESSION_EPOCHS = {"train": 16800, "test": 4080}
 
 
+def get_spectrogram(signal: torch.Tensor, n_fft: int = 100, hop_length: int = 1):
+    window = torch.hann_window(n_fft).to(signal.device)
+    stft = torch.stft(signal, n_fft, hop_length, window=window, return_complex=True)
+    return stft.abs() ** 2
+
+
 class ThingsDataset(Dataset):
-    def __init__(self, ds: np.MemoryMap, things_metadata_path: str):
+    def __init__(self, ds: np.memmap, things_metadata_path: str):
         self.ds = ds
         self.things_metadata = pd.read_csv(things_metadata_path)
 
@@ -112,8 +118,8 @@ class ThingsDataset(Dataset):
 
     def __getitem__(self, idx):
         return {
-            "eeg": self.ds[idx][1:],
-            "object": self.things_metadata.iloc[self.ds[idx][0]],
+            "eeg": self.ds[idx, 1:, :],
+            "object": self.things_metadata.iloc[self.ds[idx, 0, 0].to(int)],
         }
 
 
@@ -121,9 +127,9 @@ def extract_things_100ms_ds(
     root_dir: str,
     subjects: list[int] | range,
     validation_type: ValidationType,
-    epoch_start: int = -100,
+    epoch_start: int = -200,
     epoch_end: int = 200,
-) -> dict[str, np.MemoryMap]:
+) -> dict[str, np.memmap]:
     """This is going to be a doozy.
 
     This may look unecessarily verbose, but the goal here is to be able to go straight from the
@@ -206,17 +212,24 @@ def extract_things_100ms_ds(
                     ],
                     dtype=data["raw_eeg_data"].dtype,
                 )
+                # Get ordered electrode data.
                 data = data["raw_eeg_data"][ordered_electrode_indexes, :]
+                # Stack with stimulus data.
                 data = np.vstack((stims, data))
+                # Get the index of each stimulus onset.
                 epoch_indexes = data[0, :].nonzero()[0]
                 for k in epoch_indexes:
+                    # Get the absolute index of the current epoch.
                     n = (
                         i * 4 * SESSION_EPOCHS[split_type]
                         + j * SESSION_EPOCHS[split_type]
                         + k
                     )
-                    # rows x ch x time <- ch x time
+                    # Slice the current epoch out of the data stream.
+                    # rows x ch x time <- ch x time.
                     data[split_type][n, :, :] = data[:, k + epoch_start : k + epoch_end]
+                    # Label the stimulus channel at the start of the epoch.
+                    data[split_type][n, 0, 0] = torch.max(data[split_type][n, 0, :])
 
     return data
 
@@ -269,131 +282,3 @@ def get_transform(
         return transformed_batch
 
     return transform
-
-
-def create_dataset(
-    datafiles: list[str],
-    validation_type: ValidationType,
-    pre_transform: bool = False,
-    tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast | None = None,
-    start_token_id: int | None = None,
-    stop_token_id: int | None = None,
-    pad_token_id: int | None = None,
-    max_length: int | None = None,
-    num_channels: int | None = None,
-    num_samples: int | None = None,
-    things_concepts_path: str = "data/things_concepts.csv",
-) -> datasets.DatasetDict:
-    # If we are using subject-held-out validation, randomly choose one subject data file to hold.
-    if validation_type == ValidationType.SUBJECT:
-        assert (
-            len(datafiles) > 1
-        ), "Must provide more than one datafile for subject-held-out validation."
-        held_out_subject = random.choice(datafiles)
-        datafile_map = {
-            "train": [df for df in datafiles if df != held_out_subject],
-            "test": [held_out_subject],
-        }
-    else:
-        # Otherwise, all data is put in the training set for now.
-        datafile_map = {"train": datafiles}
-
-    dataset = datasets.load_dataset("json", data_files=datafile_map)
-    assert isinstance(dataset, datasets.DatasetDict)
-    if validation_type == ValidationType.RANDOM:
-        dataset_splits: datasets.DatasetDict = dataset["train"].train_test_split(
-            test_size=0.1, seed=42
-        )
-    elif validation_type == ValidationType.OBJECT:
-        things_concepts = pd.read_csv(things_concepts_path)
-        validation_objects = list(
-            things_concepts["uniqueID"].sample(frac=0.1, random_state=42)
-        )
-        train_dataset = dataset["train"].filter(
-            lambda row: row["object"] not in validation_objects
-        )
-        test_dataset = dataset["train"].filter(
-            lambda row: row["object"] in validation_objects
-        )
-        dataset_splits: datasets.DatasetDict = datasets.DatasetDict(
-            {"train": train_dataset, "test": test_dataset}
-        )
-    # Load bearing hack to shut up pyright.
-    assert isinstance(dataset_splits, datasets.DatasetDict)  # type: ignore
-    if pre_transform:
-        assert tokenizer is not None
-        assert start_token_id is not None
-        assert stop_token_id is not None
-        assert pad_token_id is not None
-        assert max_length is not None
-        assert num_channels is not None
-        assert num_samples is not None
-        dataset_splits = dataset_splits.map(
-            get_transform(
-                tokenizer,
-                start_token_id=start_token_id,
-                stop_token_id=stop_token_id,
-                pad_token_id=pad_token_id,
-                max_length=max_length,
-                num_channels=num_channels,
-                num_samples=num_samples,
-            ),
-            batched=True,
-            batch_size=None,
-            remove_columns=["object"],
-        )
-    print(dataset_splits)
-    return dataset_splits
-
-
-def get_dataset(
-    path: str,
-    add_transform: bool = True,
-    tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast | None = None,
-    start_token_id: int | None = None,
-    stop_token_id: int | None = None,
-    pad_token_id: int | None = None,
-    max_length: int | None = None,
-    num_channels: int | None = None,
-    num_samples: int | None = None,
-) -> datasets.DatasetDict:
-    dataset = datasets.load_from_disk(path)
-    assert isinstance(dataset, datasets.DatasetDict)
-
-    if add_transform:
-        assert tokenizer is not None
-        assert max_length is not None
-        assert num_channels is not None
-        assert num_samples is not None
-        assert start_token_id is not None
-        assert stop_token_id is not None
-        assert pad_token_id is not None
-        transform_fn = get_transform(
-            tokenizer=tokenizer,
-            max_length=max_length,
-            start_token_id=start_token_id,
-            stop_token_id=stop_token_id,
-            pad_token_id=pad_token_id,
-            num_channels=num_channels,
-            num_samples=num_samples,
-        )
-        dataset.set_transform(transform_fn)
-
-    return dataset
-
-
-if __name__ == "__main__":
-    # args = parser.parse_args()
-    # dataset = create_dataset(
-    #     datafiles=args.datafiles,
-    #     validation_type=args.validation_type,
-    #     pre_transform=args.pre_transform,
-    #     tokenizer=args.tokenizer,
-    #     max_length=args.max_length,
-    #     num_channels=args.num_channels,
-    #     num_samples=args.num_samples,
-    # )
-    # dataset.save_to_disk(args.output_path)
-    ThingsDataset(
-        "data/things_eeg_100ms", subjects=[1], validation_type=ValidationType.RANDOM
-    )
