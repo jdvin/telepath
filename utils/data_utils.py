@@ -119,7 +119,7 @@ class ThingsDataset(Dataset):
     def __getitem__(self, idx):
         return {
             "eeg": self.ds[idx, 1:, :],
-            "object": self.things_metadata.iloc[self.ds[idx, 0, 0].to(int)],
+            "object": self.things_metadata["Word"][self.ds[idx, 0, 0].to(int)],
         }
 
 
@@ -234,35 +234,28 @@ def extract_things_100ms_ds(
     return data
 
 
-def get_transform(
+def get_collate_fn(
     tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast,
     start_token_id: int,
     stop_token_id: int,
     pad_token_id: int,
     max_length: int,
-    num_channels: int,
-    num_samples: int,
     things_concepts_path: str = "data/things_concepts.csv",
-) -> Callable[[dict[str, Any]], dict[str, torch.Tensor]]:
+) -> Callable[[list[dict[str, Any]]], dict[str, torch.Tensor]]:
     # Load the map from object ID to word.
     things_concepts = pd.read_csv(things_concepts_path)
     object_id_to_word = dict(zip(things_concepts["uniqueID"], things_concepts["Word"]))
     tokenizer.pad_token_id = pad_token_id
 
     # Define transformation function with parameters.
-    def transform(batch) -> dict[str, torch.Tensor]:
-        batch_size = len(batch["object"])
-        transformed_batch = {}
-        transformed_batch["eeg"] = (
-            torch.tensor(batch["eeg"])
-            .view(batch_size, num_channels, num_samples)
-            .transpose(1, 2)
-            .to(torch.float32)
-        )
-        objects = [
-            " " + object_id_to_word[object_id].strip() for object_id in batch["object"]
-        ]
-        transformed_batch["input_ids"] = tokenizer.batch_encode_plus(
+    def collate_fn(
+        samples: list[dict[str, torch.Tensor | str]]
+    ) -> dict[str, torch.Tensor]:
+        batch_size = len(samples)
+        batch = {}
+        batch["eeg"] = torch.stack([sample["eeg"] for sample in samples])
+        objects = [" " + object_word.lower().strip() for object_word in batch["object"]]
+        batch["input_ids"] = tokenizer.batch_encode_plus(
             objects,
             padding="max_length",
             truncation=True,
@@ -270,15 +263,15 @@ def get_transform(
             - 2,  # We are going to add the start and end tokens after the fact.
             return_tensors="pt",
         )["input_ids"]
-        transformed_batch["input_ids"] = torch.cat(
+        batch["input_ids"] = torch.cat(
             (  # type: ignore
                 torch.full((batch_size, 1), start_token_id),
-                transformed_batch["input_ids"],
+                batch["input_ids"],
                 torch.full((batch_size, 1), stop_token_id),
             ),
             dim=1,
         )
 
-        return transformed_batch
+        return batch
 
-    return transform
+    return collate_fn
