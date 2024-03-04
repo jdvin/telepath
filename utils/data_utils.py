@@ -229,8 +229,9 @@ def extract_things_100ms_ds(
                     # rows x ch x time <- ch x time.
                     data[split_type][n, :, :] = data[:, k + epoch_start : k + epoch_end]
                     # Label the stimulus channel at the start of the epoch.
-                    data[split_type][n, 0, 0] = torch.max(data[split_type][n, 0, :])
+                    data[split_type][n, 0, 0] = np.max(data[split_type][n, 0, :])
 
+    assert all([isinstance(value, np.memmap) for value in data.values()])
     return data
 
 
