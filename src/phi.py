@@ -936,25 +936,33 @@ class PhiModel(PhiPreTrainedModel):
 
     def forward(
         self,
-        input_ids: torch.LongTensor = None,
+        input_ids: torch.Tensor,
+        inputs_embeds: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        past_key_values: Optional[List[List[torch.Tensor]]] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
-        device = input_ids.device if input_ids is not None else inputs_embeds.device
-        position_ids = torch.arange(
-            past_key_values_length,
-            seq_length + past_key_values_length,
-            dtype=torch.long,
-            device=device,
+        batch_size, seq_length = input_ids.shape
+        past_key_values_length = (
+            past_key_values[0][0].shape[2] if past_key_values is not None else 0
+        )
+
+        device = input_ids.device
+        # Following cogVLM, we assign all the embeddings position 0.
+        position_ids = torch.cat(
+            [
+                torch.zeros(inputs_embeds.shape[-2], dtype=torch.long, device=device),
+                torch.arange(1, seq_length, dtype=torch.long, device=device),
+            ]
         )
         position_ids = position_ids.unsqueeze(0)
 
-        if inputs_embeds is None:
-            inputs_embeds = self.embed_tokens(input_ids)
+        # Concat along the time dimension.
+        inputs_embeds = torch.concat(
+            [inputs_embeds, self.embed_tokens(input_ids)], dim=-2
+        )
 
         inputs_embeds = self.embed_dropout(inputs_embeds)
 
@@ -1072,14 +1080,12 @@ class PhiForCausalLM(PhiPreTrainedModel):
         self,
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
         Args:
@@ -1103,13 +1109,11 @@ class PhiForCausalLM(PhiPreTrainedModel):
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            position_ids=position_ids,
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
         )
 
         hidden_states = outputs[0]

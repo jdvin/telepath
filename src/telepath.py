@@ -9,7 +9,10 @@ import torch.nn.functional as F
 import yaml
 
 from .gpt import GPT, ExpertGPT
+from .phi import PhiForCausalLM
 from .components import attention, norm
+
+from transformers import WhisperModel
 
 
 @dataclass
@@ -116,6 +119,7 @@ class NeuralWhisperEncoder(nn.Module):
             AttentionEncoderBlock(block_size, d_model, n_heads, bias, dropout)
             for _ in range(n_layers)
         )
+        self.ln_post = norm.LayerNorm(d_model, affine=True, bias=True)
 
     def forward(self, x: Tensor) -> Tensor:
         x = F.gelu(self.conv1(x))
@@ -150,7 +154,9 @@ class NeuralWhisperEncoder(nn.Module):
 
     @classmethod
     def from_pretrained(cls, model_id: str):
-        pass
+        pretrained_model = WhisperModel.from_pretrained(model_id)
+        assert isinstance(pretrained_model, WhisperModel)
+        pretrained_model = pretrained_model.encoder
 
 
 class Telepath(nn.Module):
