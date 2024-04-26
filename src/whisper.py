@@ -21,32 +21,18 @@ import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
-from torch.nn import CrossEntropyLoss
+from einops import rearrange
 
 from transformers.activations import ACT2FN
-from transformers.modeling_attn_mask_utils import (
-    _prepare_4d_causal_attention_mask,
-    _prepare_4d_causal_attention_mask_for_sdpa,
-)
 from transformers.modeling_outputs import (
     BaseModelOutput,
-    BaseModelOutputWithPastAndCrossAttentions,
-    CausalLMOutputWithCrossAttentions,
-    Seq2SeqLMOutput,
-    Seq2SeqModelOutput,
-    SequenceClassifierOutput,
 )
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import (
-    add_start_docstrings,
-    add_start_docstrings_to_model_forward,
     is_flash_attn_2_available,
     is_flash_attn_greater_or_equal_2_10,
     logging,
-    replace_return_docstrings,
 )
-from .configuration_whisper import WhisperConfig
-from .generation_whisper import WhisperGenerationMixin
 
 
 if is_flash_attn_2_available():
@@ -230,6 +216,7 @@ class WhisperConfig(PretrainedConfig):
         self,
         vocab_size=51865,
         n_freqs=80,
+        n_eeg_channels=64,
         encoder_layers=4,
         encoder_attention_heads=6,
         decoder_attention_heads=6,
@@ -245,7 +232,7 @@ class WhisperConfig(PretrainedConfig):
         activation_dropout=0.0,
         init_std=0.02,
         scale_embedding=False,
-        max_source_positions=1500,
+        max_source_positions=100,
         max_target_positions=448,
         pad_token_id=50256,
         bos_token_id=50256,
@@ -266,6 +253,7 @@ class WhisperConfig(PretrainedConfig):
     ):
         self.vocab_size = vocab_size
         self.n_freqs = n_freqs
+        self.n_eeg_channels = n_eeg_channels
         self.d_model = d_model
         self.encoder_layers = encoder_layers
         self.encoder_attention_heads = encoder_attention_heads
@@ -1132,18 +1120,21 @@ class WhisperPreTrainedModel(PreTrainedModel):
             module.weight.data.normal_(mean=0.0, std=std)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
-        elif isinstance(module, WhisperEncoder):
+        elif isinstance(module, NeuralWhisperEncoder):
             with torch.no_grad():
                 embed_positions = module.embed_positions.weight
                 embed_positions.copy_(sinusoids(*embed_positions.shape))
 
-    def _get_feat_extract_output_lengths(self, input_lengths: torch.LongTensor):
+    def _get_feat_extract_output_length(self, input_length: int, conv_layer: nn.Module):
         """
         Computes the output length of the convolutional layers
         """
-        input_lengths = (input_lengths - 1) // 2 + 1
-
-        return input_lengths
+        input_length = math.floor(
+            (input_length + 2 * conv_layer.padding[-1] - conv_layer.kernel_size[-1])
+            / conv_layer.stride[-1]
+            + 1
+        )
+        return input_length
 
 
 class NeuralWhisperEncoder(WhisperPreTrainedModel):
@@ -1168,13 +1159,12 @@ class NeuralWhisperEncoder(WhisperPreTrainedModel):
         self.max_source_positions = config.max_source_positions
         self.embed_scale = math.sqrt(embed_dim) if config.scale_embedding else 1.0
 
-        # The different electrode channels are stacked across the height dimension.
         self.conv1 = nn.Conv2d(self.n_freqs, embed_dim, kernel_size=(1, 3), padding=1)
         self.conv2 = nn.Conv2d(
             embed_dim, embed_dim, kernel_size=(1, 3), stride=(1, 2), padding=1
         )
 
-        self.embeb_electrodes = nn.Embedding(self.n_eeg_channels, embed_dim)
+        self.embed_electrodes = nn.Embedding(self.n_eeg_channels, embed_dim)
         self.embed_positions = nn.Embedding(self.max_source_positions, embed_dim)
         self.embed_positions.requires_grad_(False)
 
@@ -1201,17 +1191,11 @@ class NeuralWhisperEncoder(WhisperPreTrainedModel):
     def forward(
         self,
         input_features,
-        head_mask=None,
-        output_attentions=None,
-        output_hidden_states=None,
     ):
         r"""
         Args:
             input_features (`torch.LongTensor` of shape `(batch_size, n_eeg_channels, n_freqs, sequence_length)`):
                 Float values of mel features extracted from the raw speech waveform.
-            attention_mask (`torch.Tensor`)`, *optional*):
-                Whisper does not support masking of the `input_features`, this argument is preserved for compatibility,
-                but it is not used. By default the silence in the input log mel spectrogram are ignored.
             head_mask (`torch.Tensor` of shape `(encoder_layers, encoder_attention_heads)`, *optional*):
                 Mask to nullify selected heads of the attention modules. Mask values selected in `[0, 1]`:
 
@@ -1225,54 +1209,46 @@ class NeuralWhisperEncoder(WhisperPreTrainedModel):
                 for more detail.
         """
         # (batch_size, n_ee_channels, n_freqs, sequence_length) -> (batch_size, n_freqs, n_eeg_channels, sequence_length).
-        input_features = input_features.transpose(1, 2)
-        expected_seq_length = (
-            self.config.max_source_positions
-            * self.conv1.stride[0]
-            * self.conv2.stride[0]
+        # We want the convolutions to be performed separately on each eletrode channel.
+        # The inputs to a convolution 2d are of the shape (N, C_in, H, W).
+        # In the original whisper, the channel dimension is n_freqs.
+        # The different electrode channels are stacked across the height dimension.
+        input_features = rearrange(input_features, "b c f t -> b f c t")
+        expected_seq_length = self._get_feat_extract_output_length(
+            self._get_feat_extract_output_length(
+                self.config.max_source_positions, self.conv1
+            ),
+            self.conv2,
         )
+
         if input_features.shape[-1] != expected_seq_length:
             raise ValueError(
                 f"Whisper expects the mel input features to be of length {expected_seq_length}, but found {input_features.shape[-1]}. Make sure to pad the input mel features to {expected_seq_length}."
             )
 
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
-        output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
-        )
-
-        inputs_embeds = nn.functional.gelu(self.conv1(input_features))
+        inputs_embeds: torch.Tensor = nn.functional.gelu(self.conv1(input_features))
         inputs_embeds = nn.functional.gelu(self.conv2(inputs_embeds))
 
-        inputs_embeds = inputs_embeds.permute(0, 2, 1)
-        time_embed_pos = self.embed_positions.weight
+        import pdb
 
-        # Tile the electrode embeddings across the time dimension and add the electrode positional embeddings.
-        raise NotImplementedError("The electrode embeddings are not implemented yet.")
-
-        hidden_states = inputs_embeds + time_embed_pos
+        pdb.set_trace()
+        hidden_states = inputs_embeds + self.embed_positions.weight[None, None, None, :]
         hidden_states = nn.functional.dropout(
             hidden_states, p=self.dropout, training=self.training
         )
 
-        encoder_states = () if output_hidden_states else None
-        all_attentions = () if output_attentions else None
+        # Add electrode positional embeddings.
+        hidden_states = (
+            hidden_states + self.embed_electrodes.weight[None, :, None, None]
+        )
+        # Stack the electrode embeddings across the time dimension.
+        hidden_states = rearrange(hidden_states, "b f c t -> b f (c t)")
 
-        # check if head_mask has a correct number of layers specified if desired
-        if head_mask is not None:
-            assert head_mask.size()[0] == (
-                len(self.layers)
-            ), f"The head_mask should be specified for {len(self.layers)} layers, but it is for {head_mask.size()[0]}."
+        encoder_states = ()
+        all_attentions = ()
 
         for idx, encoder_layer in enumerate(self.layers):
-            if output_hidden_states:
-                encoder_states = encoder_states + (hidden_states,)
+            encoder_states = encoder_states + (hidden_states,)
             # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
             to_drop = False
             if self.training:
@@ -1288,36 +1264,33 @@ class NeuralWhisperEncoder(WhisperPreTrainedModel):
                         encoder_layer.__call__,
                         hidden_states,
                         None,
-                        (head_mask[idx] if head_mask is not None else None),
-                        output_attentions,
+                        None,
+                        True,
                     )
                 else:
                     layer_outputs = encoder_layer(
                         hidden_states,
                         None,
-                        layer_head_mask=(
-                            head_mask[idx] if head_mask is not None else None
-                        ),
-                        output_attentions=output_attentions,
+                        None,
+                        True,
                     )
 
                 hidden_states = layer_outputs[0]
 
-            if output_attentions:
-                all_attentions = all_attentions + (layer_outputs[1],)
+            all_attentions = all_attentions + (layer_outputs[1],)
 
         hidden_states = self.layer_norm(hidden_states)
-        if output_hidden_states:
-            encoder_states = encoder_states + (hidden_states,)
+        encoder_states = encoder_states + (hidden_states,)
 
-        if not return_dict:
-            return tuple(
-                v
-                for v in [hidden_states, encoder_states, all_attentions]
-                if v is not None
-            )
-        return BaseModelOutput(
+        return dict(
             last_hidden_state=hidden_states,
             hidden_states=encoder_states,
             attentions=all_attentions,
         )
+
+
+if __name__ == "__main__":
+    config = WhisperConfig()
+    model = NeuralWhisperEncoder(config)
+    input_features = torch.randn(1, 64, 80, 100)
+    model(input_features)
