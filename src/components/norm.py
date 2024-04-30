@@ -52,4 +52,4 @@ class LayerNorm(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Taken from formula at https://pytorch.org/docs/stable/generated/torch.nn.LayerNorm.html."""
-        return self.graph.forward(x)
+        return self.graph.forward(x.float()).type(x.dtype)
