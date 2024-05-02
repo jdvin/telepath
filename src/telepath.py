@@ -1,6 +1,5 @@
 from dataclasses import dataclass
-from json import encoder
-import math
+from typing import List
 
 import numpy as np
 import torch
@@ -8,9 +7,8 @@ from torch import nn, Tensor
 import torch.nn.functional as F
 import yaml
 
-from .gpt import GPT, ExpertGPT
-from .phi import PhiForCausalLM
-from .components import attention, norm
+from .components.attention import MultiHeadAttention
+from .components.norm import LayerNorm
 
 from transformers import WhisperModel
 
@@ -18,7 +16,6 @@ from transformers import WhisperModel
 @dataclass
 class TelepathConfig:
     pretrained_whisper: str
-    tokenizer_path: str
     pretrained_gpt: str
     freeze_gpt: bool
     gpt_start_token: int
@@ -33,10 +30,6 @@ class TelepathConfig:
         return cls(**config)
 
 
-class WaveNetEncoder(nn.Module):
-    pass
-
-
 def sinusoids(length: int, channels: int, max_timescale: int = 1000):
     """Returns sinusoids for positional embedding
 
@@ -49,82 +42,100 @@ def sinusoids(length: int, channels: int, max_timescale: int = 1000):
     return torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=1)
 
 
-class AttentionEncoderBlock(nn.Module):
-    def __init__(
-        self, block_size: int, d_model: int, n_heads: int, bias: bool, dropout: float
-    ):
-        super().__init__()
-        self.ln_1 = norm.LayerNorm(d_model, affine=True, bias=bias)
-        self.attn = attention.MultiheadAttention(
-            n_heads=n_heads,
-            d_model=d_model,
-            proj_bias=bias,
-            block_size=block_size,
-            dropout=dropout,
-            is_causal=False,
-            flash=True,
-        )
-        self.ln_2 = norm.LayerNorm(
-            d_model,
-            affine=True,
-        )
-        self.mlp = nn.Sequential(
-            nn.Linear(d_model, 4 * d_model),
-            nn.GELU(),
-            nn.Linear(4 * d_model, d_model),
-        )
-
-    def forward(self, x: Tensor) -> Tensor:
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
-        return x
-
-
-class NeuralWhisperEncoder(nn.Module):
+class ResidualAttentionBlock(nn.Module):
     def __init__(
         self,
-        n_input_channels: int,
-        n_input_samples: int,
-        conv1_kernel_size: int,
-        conv1_padding: int,
-        conv1_dilation: int,
-        conv2_kernel_size: int,
-        conv2_padding: int,
-        conv2_dilation: int,
         block_size: int,
         d_model: int,
         n_heads: int,
-        bias: bool,
+        cross_attn: bool = False,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.attn = MultiHeadAttention(
+            n_heads=n_heads,
+            d_model=d_model,
+            scale=(d_model // n_heads) ** -0.25,
+            k_bias=True,
+            block_size=block_size,
+            dropout=dropout,
+        )
+        self.attn_ln = LayerNorm(d_model)
+
+        self.cross_attn = (
+            MultiHeadAttention(
+                n_heads, d_model, k_bias=True, block_size=block_size, dropout=dropout
+            )
+            if cross_attn
+            else None
+        )
+        self.cross_attn_ln = LayerNorm(d_model) if cross_attn else None
+
+        d_mlp = 4 * d_model
+        self.mlp = nn.Sequential(
+            nn.Linear(d_model, d_mlp),
+            nn.GELU(),
+            nn.Linear(d_mlp, d_model),
+        )
+        self.mlp_ln = LayerNorm(d_model)
+
+    def forward(self, x: Tensor, kv_cache: dict[int, Tensor] | None = None) -> Tensor:
+        x = x + self.attn(self.attn_ln(x))
+        if self.cross_attn and self.cross_attn_ln:
+            x = x + self.cross_attn(self.cross_attn_ln(x), kv_cache=kv_cache)
+        x = x + self.mlp(self.mlp_ln(x))
+        return x
+
+
+class NeuralEncoder(nn.Module):
+    def __init__(
+        self,
+        n_freqs: int,
+        block_size: int,
+        d_model: int,
+        n_heads: int,
         dropout: float,
         n_layers: int,
     ):
         super().__init__()
+
+        # We want the convolutions to be performed separately on each eletrode channel.
+        # The channels will be stacked across the height dimension.
         self.conv1 = nn.Conv2d(
-            in_channels=n_input_channels,
+            in_channels=n_freqs,
             out_channels=d_model,
-            kernel_size=conv1_kernel_size,
-            dilation=conv1_dilation,
-            padding=conv1_padding,
+            kernel_size=(1, 3),
+            padding=1,
         )
         self.conv2 = nn.Conv2d(
             in_channels=d_model,
             out_channels=d_model,
-            kernel_size=conv2_kernel_size,
-            dilation=conv2_dilation,
-            padding=conv2_padding,
+            kernel_size=(1, 3),
+            stride=(1, 2),
+            padding=1,
         )
-        self.register_buffer("positional_embedding", sinusoids(block_size, d_model))
+        self.register_buffer("embed_positions", sinusoids(block_size, d_model))
+        self.embed_electrodes = nn.Embedding(n_freqs, d_model)
 
         self.blocks = nn.ModuleList(
-            AttentionEncoderBlock(block_size, d_model, n_heads, bias, dropout)
+            ResidualAttentionBlock(block_size, d_model, n_heads, dropout=dropout)
             for _ in range(n_layers)
         )
-        self.ln_post = norm.LayerNorm(d_model, affine=True, bias=True)
+        self.ln_post = LayerNorm(d_model)
 
     def forward(self, x: Tensor) -> Tensor:
+        # (batch_size, n_ee_channels, n_freqs, sequence_length) -> (batch_size, n_freqs, n_eeg_channels, sequence_length).
+        # We want the convolutions to be performed separately on each eletrode channel.
+        # The inputs to a convolution 2d are of the shape (N, C_in, H, W).
+        B, N_C, N_F, T = x.size()
+        x = x.reshape(B, N_F, N_C, T)
+
         x = F.gelu(self.conv1(x))
         x = F.gelu(self.conv2(x))
-        x = (x + self.positional_embedding).to(x.dtype)
+        x = (x + self.embed_positions).to(x.dtype)
+        x = x + self.embed_electrodes.weight
+        # Stack the electrode embeddings across the time dimension.
+        x = x.reshape(B, N_F, N_C * T)
         for block in self.blocks:
             x = block(x)
         return x

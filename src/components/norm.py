@@ -37,7 +37,7 @@ class LayerNorm(nn.Module):
     """Layernorm with composability."""
 
     def __init__(
-        self, size: int, shift=True, scale=True, eps=1e-6, affine=True, bias=True
+        self, size: int, shift=True, scale=True, eps=1e-5, affine=True, bias=True
     ):
         super().__init__()
         graph = []
