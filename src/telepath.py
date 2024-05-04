@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List
+from typing import List, Sequence, Iterable
 
 import numpy as np
 import torch
@@ -10,24 +10,51 @@ import yaml
 from .components.attention import MultiHeadAttention
 from .components.norm import LayerNorm
 
-from transformers import WhisperModel
+from transformers import WhisperModel, WhisperConfig
 
 
 @dataclass
 class TelepathConfig:
+    n_eeg_channels: int
     pretrained_whisper: str
-    pretrained_gpt: str
-    freeze_gpt: bool
-    gpt_start_token: int
-    gpt_stop_token: int
-    gpt_block_size: int
-    gpt_dropout: float
+    decoder_start_sequence: list[int]
+    decoder_stop_token: int
+    decoder_vocab_size: int
+    encoder_block_size: int
+    decoder_block_size: int
+    n_freqs: int
+    d_model: int
+    n_heads: int
+    encoder_n_layers: int
+    decoder_n_layers: int
+    dropout = 0.1
 
     @classmethod
     def from_yaml(cls, path: str):
         with open(path, "r") as f:
             config = yaml.safe_load(f)
         return cls(**config)
+
+    def __post_init__(self):
+        if not self.pretrained_whisper:
+            assert (
+                self.n_freqs
+                and self.d_model
+                and self.n_heads
+                and self.encoder_n_layers
+                and self.decoder_n_layers
+            )
+            return
+        pt_whisper_config = WhisperConfig.from_pretrained(self.pretrained_whisper)
+        self.n_freqs = pt_whisper_config.n_freqs
+        self.d_model = pt_whisper_config.d_model
+        self.n_heads = self.n_heads or pt_whisper_config.n_heads
+        self.encoder_n_layers = (
+            self.encoder_n_layers or pt_whisper_config.encoder_n_layers
+        )
+        self.decoder_n_layers = (
+            self.decoder_n_layers or pt_whisper_config.decoder_n_layers
+        )
 
 
 def sinusoids(length: int, channels: int, max_timescale: int = 1000):
@@ -163,11 +190,88 @@ class NeuralEncoder(nn.Module):
         )
         return optim_groups
 
-    @classmethod
-    def from_pretrained(cls, model_id: str):
-        pretrained_model = WhisperModel.from_pretrained(model_id)
-        assert isinstance(pretrained_model, WhisperModel)
-        pretrained_model = pretrained_model.encoder
+
+class TextDecoder(nn.Module):
+    def __init__(
+        self, n_vocab: int, n_ctx: int, d_model: int, n_head: int, n_layer: int
+    ):
+        super().__init__()
+        self.embed_tokens = nn.Embedding(n_vocab, d_model)
+        self.embed_positions = nn.Parameter(torch.zeros(n_ctx, d_model))
+        self.blocks = nn.ModuleList(
+            ResidualAttentionBlock(n_ctx, d_model, n_head, cross_attn=True)
+            for _ in range(n_layer)
+        )
+        assert isinstance(self.blocks[0], ResidualAttentionBlock)
+        assert isinstance(self.blocks[0].attn, MultiHeadAttention)
+        assert isinstance(self.blocks[0].attn.k_proj, nn.Linear)
+        self.ln_post = LayerNorm(d_model)
+
+    def forward(
+        self,
+        x: Tensor,
+        xc: Tensor | None = None,
+        kv_cache: dict[int, Tensor] | None = None,
+        inference: bool = False,
+    ) -> Tensor:
+        offset = kv_cache[next(iter(kv_cache.values()))].size(0) if kv_cache else 0
+        x = self.embed_tokens(x) + self.embed_positions[offset : offset + x.size(1)]
+        for block in self.blocks:
+            x = block(x, xc, kv_cache=kv_cache)
+        x = self.ln_post(x)
+        if inference:
+            x = x[:, -1, :]
+        return x @ self.embed_tokens.weight.t()
+
+    @torch.no_grad()
+    def generate(
+        self,
+        input_ids: torch.Tensor,
+        embed: torch.Tensor | None = None,
+        max_length: int = 10,
+        stop_token: int = 50256,
+    ) -> list[list[int]]:
+        """Generate a sequence of tokens using argmax sampling.
+
+        Optimised for batch generation; pops generations off the inference stack as they complete.
+        Attributes:
+            input_ids: Input token ids of shape (batch_size, n_tokens).
+            concat_embed: Additional embeddings used by the model forward method. Must be of size (batch_size, k, d_model).
+            max_length: Maximum length of the generated sequence.
+            stop_token: Token id of the stop token.
+        """
+        kv_cache = {}
+        batch_size = input_ids.size(0) if len(input_ids.size()) == 2 else 1
+        # Preallocate generations so that we can save them by order.
+        generations = [[] for _ in range(batch_size)]
+        # Used to track the indexes of the running generations.
+        generating_batch_indexes = list(range(batch_size))
+        for _ in range(max_length):
+            logits = self.forward(input_ids, embed, inference=True, kv_cache=kv_cache)
+            input_ids = torch.cat([input_ids, logits.argmax(dim=-1)], dim=1)
+            # Get the index of every generation that has generated the stop token.
+            stop_indexes = (
+                (input_ids[:, -1] == stop_token).nonzero(as_tuple=True)[0].tolist()
+            )
+            while stop_indexes:
+                # Remove the running generations that have generated the stop token.
+                i = stop_indexes.pop()
+                # Get the batch position of the current generation and remove it from the list of those currently generating.
+                batch_index = generating_batch_indexes.pop(i)
+                # Map from current relative index to batch index.
+                generations[batch_index] = input_ids[i, :].tolist()
+                input_ids = torch.cat([input_ids[:i, :], input_ids[i + 1 :, :]], dim=0)
+                if embed is not None:
+                    embed = torch.cat([embed[:i, :, :], embed[i + 1 :, :, :]], dim=0)
+                # Shift the indexes after the one just removed.
+                stop_indexes = [(j - 1) if j > i else j for j in stop_indexes]
+
+            if len(generating_batch_indexes) == 0:
+                break
+        # If there are still running generations, add them to the list.
+        for i, batch_index in enumerate(generating_batch_indexes):
+            generations[batch_index] = input_ids[i, :].tolist()
+        return generations
 
 
 class Telepath(nn.Module):
@@ -175,24 +279,25 @@ class Telepath(nn.Module):
         super().__init__()
         self.config = config
 
-        self.pre_norm = norm.LayerNorm(
-            size=config.n_channels,
-            shift=config.pre_norm_shift,
-            scale=config.pre_norm_scale,
-            affine=config.pre_norm_affine,
-            bias=config.pre_norm_bias,
+        self.encoder = NeuralEncoder(
+            n_freqs=config.n_freqs,
+            block_size=config.decoder_block_size,
+            d_model=config.d_model,
+            n_heads=config.n_heads,
+            n_layers=config.encoder_n_layers,
+            dropout=config.dropout,
         )
 
-        self.encoder = NeuralWhisperEncoder.from_pretrained()
-
-        self.decoder = ExpertGPT.from_pretrained(
-            model_type=config.pretrained_gpt,
-            expert_block_size=config.expert_encoder_block_size,
+        self.decoder = TextDecoder(
+            n_vocab=config.decoder_vocab_size,
+            n_ctx=config.decoder_block_size,
+            d_model=config.d_model,
+            n_head=config.n_heads,
+            n_layer=config.decoder_n_layers,
         )
-        self.decoder.crop_block_size(config.gpt_block_size)
 
-        self.start_token = config.gpt_start_token
-        self.stop_token = config.gpt_stop_token
+        self.start_sequence = config.decoder_start_sequence
+        self.stop_token = config.decoder_stop_token
 
     def forward(self, eeg: Tensor, input_ids: Tensor) -> Tensor:
         """Forward pass through the Telepath model.
@@ -201,10 +306,7 @@ class Telepath(nn.Module):
             eeg_signal: EEG signal of shape (batch_size, n_samples, n_channels).
             input_ids: Input token ids of shape (batch_size, n_tokens).
         """
-        enc = self.pre_norm(eeg)
-        enc = self.encoder_proj(enc)
-        enc = self.encoder(enc)
-        return self.decoder.forward(input_ids, embed=enc)
+        return self.decoder(input_ids, xc=self.encoder(eeg))
 
     @torch.no_grad()
     def generate(
@@ -218,11 +320,32 @@ class Telepath(nn.Module):
         assert len(eeg.size()) == 3
         batch_size = eeg.size(0)
         eeg = eeg.to(device)
-        enc = self.pre_norm(eeg)
-        enc = self.encoder_proj(enc)
-        enc = self.encoder(enc)
+        enc = self.encoder(eeg)
         return self.decoder.generate(
             input_ids=torch.full((batch_size, 1), self.start_token).to(device),
             embed=enc,
             stop_token=stop_token or self.stop_token,
         )
+
+    @classmethod
+    def from_pretrained(cls, config: TelepathConfig):
+        pt_whisper = WhisperModel.from_pretrained(config.pretrained_whisper)
+        assert isinstance(pretrained_model, WhisperModel)
+        param_map = {
+            "layers": "blocks",
+            "self_attn": "attn",
+            "self_attn_layer_norm": "attn_ln.graph.2",
+            "fc1": "mlp.0",
+            "fc2": "mlp.2",
+            "final_layer_norm": "mlp_ln.graph.2",
+            "layer_norm": "ln_post.graph.2",
+        }
+        map_params = lambda pn: ".".join(
+            [param_map.get(seg, seg) for seg in pn.split(".")]
+        )
+        for key, param in pt_whisper.state_dict().items():
+            new_key = map_params(key)
+            if "conv" in key:
+                param = ...
+
+            pretrained_model.state_dict()[new_key] = param
