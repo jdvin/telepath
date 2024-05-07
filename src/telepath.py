@@ -17,7 +17,7 @@ from transformers import WhisperModel, WhisperConfig
 class TelepathConfig:
     n_eeg_channels: int
     pretrained_whisper: str
-    decoder_start_sequence: list[int]
+    decoder_start_sequence: Tensor
     decoder_stop_token: int
     decoder_vocab_size: int
     encoder_block_size: int
@@ -41,11 +41,20 @@ class TelepathConfig:
                 self.n_freqs
                 and self.d_model
                 and self.n_heads
+                and self.decoder_vocab_size
                 and self.encoder_n_layers
                 and self.decoder_n_layers
+                and self.decoder_vocab_size
+                and self.decoder_start_sequence
+                and self.decoder_stop_token
             )
             return
         pt_whisper_config = WhisperConfig.from_pretrained(self.pretrained_whisper)
+        tokenizer = WhisperModel.from_pretrained(
+            self.pretrained_whisper, task="translate", language="english"
+        )
+        assert isinstance(tokenizer, WhisperModel)
+        self.decoder_vocab_size = pt_whisper_config.vocab_size
         self.n_freqs = pt_whisper_config.n_freqs
         self.d_model = pt_whisper_config.d_model
         self.n_heads = self.n_heads or pt_whisper_config.n_heads
@@ -55,6 +64,10 @@ class TelepathConfig:
         self.decoder_n_layers = (
             self.decoder_n_layers or pt_whisper_config.decoder_n_layers
         )
+        assert isinstance(tokenizer.prefix_tokens, list)
+        self.decoder_start_sequence = torch.tensor(tokenizer.prefix_tokens)
+        assert isinstance(tokenizer.eos_token_id, int)
+        self.decoder_stop_token = tokenizer.eos_token_id
 
 
 def sinusoids(length: int, channels: int, max_timescale: int = 1000):
@@ -318,19 +331,19 @@ class Telepath(nn.Module):
             stop_token: Token id to stop generation at.
         """
         assert len(eeg.size()) == 3
-        batch_size = eeg.size(0)
+        B = eeg.size(0)
         eeg = eeg.to(device)
         enc = self.encoder(eeg)
         return self.decoder.generate(
-            input_ids=torch.full((batch_size, 1), self.start_token).to(device),
+            input_ids=self.start_sequence.repeat(B, 1).detach().to(device),
             embed=enc,
             stop_token=stop_token or self.stop_token,
         )
 
     @classmethod
     def from_pretrained(cls, config: TelepathConfig):
-        pt_whisper = WhisperModel.from_pretrained(config.pretrained_whisper)
-        assert isinstance(pretrained_model, WhisperModel)
+        ptw = WhisperModel.from_pretrained(config.pretrained_whisper)
+        assert isinstance(ptw, WhisperModel)
         param_map = {
             "layers": "blocks",
             "self_attn": "attn",
@@ -343,9 +356,16 @@ class Telepath(nn.Module):
         map_params = lambda pn: ".".join(
             [param_map.get(seg, seg) for seg in pn.split(".")]
         )
-        for key, param in pt_whisper.state_dict().items():
+        nw = cls(config)
+        nw_sd = nw.state_dict()
+        for key, param in ptw.state_dict().items():
             new_key = map_params(key)
+            # We are moving from a 1D conv to a 2D conv, but we want the conv to be the same for each eletrode.
+            # NOTE: Do we want to have unique params for each electrode?
+            # Could then initialize from the same weights but have them learn different filters.
             if "conv" in key:
-                param = ...
+                param = param.unsqueeze(2)
 
-            pretrained_model.state_dict()[new_key] = param
+            nw_sd[new_key] = param
+        nw.load_state_dict(nw_sd)
+        return nw
