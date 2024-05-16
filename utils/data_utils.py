@@ -1,14 +1,12 @@
 import argparse
 from enum import Enum
 import os
-import random
 from typing import Callable, Any
 
-import datasets
 import numpy as np
 import pandas as pd
 import torch
-from torch._C import dtype
+from torch import Tensor
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
 
@@ -102,7 +100,7 @@ ELECTRODE_ORDER = np.array(
 SESSION_EPOCHS = {"train": 16800, "test": 4080}
 
 
-def get_spectrogram(signal: torch.Tensor, n_fft: int = 100, hop_length: int = 1):
+def get_spectrogram(signal: torch.Tensor, n_fft: int, hop_length: int):
     window = torch.hann_window(n_fft).to(signal.device)
     stft = torch.stft(signal, n_fft, hop_length, window=window, return_complex=True)
     return stft.abs() ** 2
@@ -166,7 +164,7 @@ def extract_things_100ms_ds(
         epoch_end - epoch_start,
     )
 
-    data = {
+    ds = {
         "train": np.memmap(
             filename=training_file_path,
             mode="r" if cached else "w+",
@@ -179,9 +177,10 @@ def extract_things_100ms_ds(
         ),
     }
     if cached:
-        return data
+        return ds
 
     for i, sub in enumerate(subjects):
+        # Magic number 4 corresponds to number of sessions in the dataset.
         for j, ses in enumerate(range(1, 5)):
             for split_type in ["train", "test"]:
                 path = os.path.join(
@@ -227,17 +226,17 @@ def extract_things_100ms_ds(
                     )
                     # Slice the current epoch out of the data stream.
                     # rows x ch x time <- ch x time.
-                    data[split_type][n, :, :] = data[:, k + epoch_start : k + epoch_end]
+                    ds[split_type][n, :, :] = data[:, k + epoch_start : k + epoch_end]
                     # Label the stimulus channel at the start of the epoch.
-                    data[split_type][n, 0, 0] = np.max(data[split_type][n, 0, :])
+                    ds[split_type][n, 0, 0] = np.max(data[split_type][n, 0, :])
 
-    assert all([isinstance(value, np.memmap) for value in data.values()])
-    return data
+    assert all([isinstance(value, np.memmap) for value in ds.values()])
+    return ds
 
 
 def get_collate_fn(
     tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast,
-    start_token_id: int,
+    start_token_id_sequence: Tensor,
     stop_token_id: int,
     pad_token_id: int,
     max_length: int,
@@ -254,19 +253,23 @@ def get_collate_fn(
     ) -> dict[str, torch.Tensor]:
         batch_size = len(samples)
         batch = {}
-        batch["eeg"] = torch.stack([sample["eeg"] for sample in samples])
+        eegs: list[Tensor] = [
+            sample["eeg"] for sample in samples if isinstance(sample["eeg"], Tensor)
+        ]  # fuck you pyright.
+        batch["eeg"] = torch.stack(eegs)
         objects = [" " + object_word.lower().strip() for object_word in batch["object"]]
+        num_special_tokens = len(start_token_id_sequence) + 1
         batch["input_ids"] = tokenizer.batch_encode_plus(
             objects,
             padding="max_length",
             truncation=True,
             max_length=max_length
-            - 2,  # We are going to add the start and end tokens after the fact.
+            - num_special_tokens,  # We are going to add the start and end tokens after the fact.
             return_tensors="pt",
         )["input_ids"]
         batch["input_ids"] = torch.cat(
             (  # type: ignore
-                torch.full((batch_size, 1), start_token_id),
+                torch.tile(start_token_id_sequence, (batch_size, 1)),
                 batch["input_ids"],
                 torch.full((batch_size, 1), stop_token_id),
             ),

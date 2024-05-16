@@ -19,6 +19,7 @@ class TelepathConfig:
     pretrained_whisper: str
     decoder_start_sequence: Tensor
     decoder_stop_token: int
+    decoder_special_tokens_start: int
     decoder_vocab_size: int
     encoder_block_size: int
     decoder_block_size: int
@@ -47,6 +48,7 @@ class TelepathConfig:
                 and self.decoder_vocab_size
                 and self.decoder_start_sequence
                 and self.decoder_stop_token
+                and self.decoder_special_tokens_start
             )
             return
         pt_whisper_config = WhisperConfig.from_pretrained(self.pretrained_whisper)
@@ -68,6 +70,7 @@ class TelepathConfig:
         self.decoder_start_sequence = torch.tensor(tokenizer.prefix_tokens)
         assert isinstance(tokenizer.eos_token_id, int)
         self.decoder_stop_token = tokenizer.eos_token_id
+        self.decoder_special_tokens_start = min(tokenizer.added_tokens_decoder.keys())
 
 
 def sinusoids(length: int, channels: int, max_timescale: int = 1000):

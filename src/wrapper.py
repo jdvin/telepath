@@ -62,37 +62,35 @@ class OptimizerConfig:
         return cls(optim=optim, lr_scheduler=lr_scheduler, **config)
 
 
-class TelepathWrapper:
+class Trainer:
     def __init__(self, model_config_path: str, optimizer_config_path: str, device: str):
         super().__init__()
         self.config = TelepathConfig.from_yaml(model_config_path)
         self.model = Telepath(self.config).to(device)
         self.optimizer_config = OptimizerConfig.from_yaml(optimizer_config_path)
         self.device = device
-        self.tokenizer = AutoTokenizer.from_pretrained(self.config.tokenizer_path)
-        if self.config.freeze_gpt:
-            for param in self.model.decoder.parameters():
-                param.requires_grad = False
+        self.tokenizer = AutoTokenizer.from_pretrained(self.config.pretrained_whisper)
 
     def step(
         self,
         batch: dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        eeg, tokens = batch["eeg"], batch["input_ids"]
-        logits = self.model(eeg, tokens).clone()
-        loss = self.model.decoder.loss(logits, tokens)
+        eeg, tokens = batch["input_features"], batch["input_ids"]
+        # Remove the last token from the logits, as we don't need to predict the padding token.
+        logits = self.model(eeg, tokens)[:, :-1, :].contiguous()
+        # Flatten logits tensor (B x T-1 x V) to 2D tensor ((B T-1) x V) for loss calculation.
+        logits = logits.view(-1, logits.size(-1))
+        # Shift and flatten labels (B x T) to 1D tensor (B T-1).
+        labels = tokens[:, 1:].contiguous().view(-1)
+        # Mask special tokens.
+        labels[labels >= self.config.decoder_special_tokens_start] = -100
+        loss = F.cross_entropy(logits, labels, ignore_index=-100)
         return loss
 
     def configure_optimizers(self, num_batches: int) -> tuple:
         param_groups = self.model.encoder.optim_groups(
             self.optimizer_config.optim_params.pop("weight_decay")
         )
-        if not self.config.freeze_gpt:
-            param_groups.extend(
-                self.model.decoder.optim_groups(
-                    self.optimizer_config.optim_params.pop("weight_decay")
-                )
-            )
 
         optim = self.optimizer_config.optim(
             param_groups, **self.optimizer_config.optim_params
