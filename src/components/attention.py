@@ -30,6 +30,7 @@ class MultiHeadAttention(torch.nn.Module):
         self.is_causal = is_causal
         assert scale
         self.scale = scale
+        # The projectons are scalled differently in the original whisper implementation
         self.q_proj = nn.Linear(d_model, d_model, bias=q_bias)
         self.k_proj = nn.Linear(d_model, d_model, bias=k_bias)
         self.v_proj = nn.Linear(d_model, d_model, bias=v_bias)
@@ -48,13 +49,22 @@ class MultiHeadAttention(torch.nn.Module):
         """Split matrices into heads and reshape to have heads as child ranks."""
         return x.view(B, T, self.n_heads, D // self.n_heads).transpose(1, 2)
 
-    def qkv_attention(self, q: Tensor, k: Tensor, v: Tensor, T: int) -> Tensor:
+    def qkv_attention(
+        self,
+        q: Tensor,
+        k: Tensor,
+        v: Tensor,
+        T: int,
+        attention_mask: Tensor | None = None,
+    ) -> Tensor:
+        if attention_mask is None:
+            attention_mask = torch.ones(T, T)
         if self.flash:
             y = F.scaled_dot_product_attention(
                 q,
                 k,
                 v,
-                attn_mask=None,
+                attn_mask=attention_mask,
                 dropout_p=self.dropout if self.training else 0,
                 is_causal=self.is_causal,
                 scale=self.scale,
@@ -63,12 +73,13 @@ class MultiHeadAttention(torch.nn.Module):
             # (B, nhead, T, D_head) x (B, nhead, D_head, T) -> (B, nhead, T, T).
             qk = (q @ k.transpose(-2, -1)) * self.scale
             # Fill the upper triangle. Effectively a no-op if not causal.
-            qk = qk.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))  # type: ignore
+            mask = torch.bitwise_or(self.bias[:, :, :T, :T] == 0, attention_mask == 0)  # type: ignore
+            qk = qk.masked_fill(mask, float("-inf"))  # type: ignore
             attn = F.softmax(qk, dim=-1, dtype=torch.float32).type_as(qk)
             attn = self.attn_dropout(attn)
             # (B, nhead, T, T) x (B, nhead, T, D_head) -> (B, nhead, T, D_head).
             y = attn @ v
-        return y
+ self.bias[:, :, :T, :T] == 0       return y
 
     def forward(
         self,

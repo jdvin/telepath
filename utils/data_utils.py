@@ -2,6 +2,7 @@ import argparse
 from enum import Enum
 import os
 from typing import Callable, Any
+import time
 
 import numpy as np
 import pandas as pd
@@ -17,16 +18,6 @@ class ValidationType(Enum):
     SUBJECT = "subject"
     OBJECT = "object"
 
-
-parser = argparse.ArgumentParser()
-parser.add_argument("--datafiles", type=str, nargs="+", required=True)
-parser.add_argument("--validation_type", type=ValidationType, required=True)
-parser.add_argument("--pre_transform", action="store_true")
-parser.add_argument("--tokenizer", type=str)
-parser.add_argument("--max_length", type=int)
-parser.add_argument("--num_channels", type=int)
-parser.add_argument("--num_samples", type=int)
-parser.add_argument("--output_path", type=str)
 
 ELECTRODE_ORDER = np.array(
     [
@@ -96,6 +87,8 @@ ELECTRODE_ORDER = np.array(
     ]
 )
 
+SESSIONS_PER_SUBJECT = 4
+
 
 SESSION_EPOCHS = {"train": 16800, "test": 4080}
 
@@ -116,17 +109,31 @@ class ThingsDataset(Dataset):
 
     def __getitem__(self, idx):
         return {
+            # Slice out the stimulus channels.
             "eeg": self.ds[idx, 1:, :],
+            # Get the object id from the stimulus channel.
             "object": self.things_metadata["Word"][self.ds[idx, 0, 0].to(int)],
         }
+
+
+def get_dataset_dict(
+    root_dir: str, ds_key: str, things_metadata_path
+) -> dict[str, ThingsDataset]:
+    train_data = np.load(f"{root_dir}/{ds_key}_train.npy", allow_pickle=True)
+    test_data = np.load(f"{root_dir}/{ds_key}_test.npy", allow_pickle=True)
+    return {
+        "train": ThingsDataset(train_data, things_metadata_path),
+        "test": ThingsDataset(test_data, things_metadata_path),
+    }
 
 
 def extract_things_100ms_ds(
     root_dir: str,
     subjects: list[int] | range,
-    validation_type: ValidationType,
+    validation_type: ValidationType = ValidationType.DEFAULT,
     epoch_start: int = -200,
     epoch_end: int = 200,
+    reset_cache: bool = False,
 ) -> dict[str, np.memmap]:
     """This is going to be a doozy.
 
@@ -137,13 +144,9 @@ def extract_things_100ms_ds(
     Side Note: I have no idea why the dude set the dataset up like this, would it not have made so much more sense to just
     use the common indexing scheme of THINGS between the training and test sets to begin with?
     """
-    ds_str = (
-        "".join([str(sub) for sub in subjects])
-        + validation_type.value
-        + str(epoch_start)
-        + str(epoch_end)
-    )
-
+    ds_str = "".join([str(sub) for sub in subjects]) + str(epoch_start) + str(epoch_end)
+    if validation_type != ValidationType.DEFAULT:
+        raise NotImplementedError("Only default validation type is supported atm.")
     # Keys are coded: `{split_type}_img_concepts_THINGS`.
     # Values are coded arrays of strings each coded: `{index}_{object_id}`.
     # The index is offset by +1 relative to THINGS probably because `0` is used as padding in the stim channel.
@@ -155,12 +158,12 @@ def extract_things_100ms_ds(
         if "THINGS" in key
     }
 
-    training_file_path = f"{root_dir}/{ds_str}_training.npy"
+    training_file_path = f"{root_dir}/{ds_str}_train.npy"
     test_file_path = f"{root_dir}/{ds_str}_test.npy"
     cached = os.path.exists(training_file_path) and os.path.exists(test_file_path)
     split_shape = lambda epochs_per_session: (
-        len(subjects) * 4 * epochs_per_session,
-        64,
+        len(subjects) * SESSIONS_PER_SUBJECT * epochs_per_session,
+        len(ELECTRODE_ORDER),
         epoch_end - epoch_start,
     )
 
@@ -171,17 +174,16 @@ def extract_things_100ms_ds(
             shape=split_shape(SESSION_EPOCHS["train"]),
         ),
         "test": np.memmap(
-            filename=f"{root_dir}/{ds_str}_test.npy",
+            filename=test_file_path,
             mode="r" if cached else "w+",
             shape=split_shape(SESSION_EPOCHS["test"]),
         ),
     }
-    if cached:
+    if cached and not reset_cache:
         return ds
 
     for i, sub in enumerate(subjects):
-        # Magic number 4 corresponds to number of sessions in the dataset.
-        for j, ses in enumerate(range(1, 5)):
+        for j, ses in enumerate(range(1, SESSIONS_PER_SUBJECT + 1)):
             for split_type in ["train", "test"]:
                 path = os.path.join(
                     root_dir,
@@ -220,7 +222,7 @@ def extract_things_100ms_ds(
                 for k in epoch_indexes:
                     # Get the absolute index of the current epoch.
                     n = (
-                        i * 4 * SESSION_EPOCHS[split_type]
+                        i * SESSIONS_PER_SUBJECT * SESSION_EPOCHS[split_type]
                         + j * SESSION_EPOCHS[split_type]
                         + k
                     )
@@ -239,13 +241,15 @@ def get_collate_fn(
     start_token_id_sequence: Tensor,
     stop_token_id: int,
     pad_token_id: int,
-    max_length: int,
+    n_fft: int,
+    fft_hop_length: int,
     things_concepts_path: str = "data/things_concepts.csv",
 ) -> Callable[[list[dict[str, Any]]], dict[str, torch.Tensor]]:
     # Load the map from object ID to word.
     things_concepts = pd.read_csv(things_concepts_path)
     object_id_to_word = dict(zip(things_concepts["uniqueID"], things_concepts["Word"]))
     tokenizer.pad_token_id = pad_token_id
+    stop_token = tokenizer.decode([stop_token_id])
 
     # Define transformation function with parameters.
     def collate_fn(
@@ -256,21 +260,27 @@ def get_collate_fn(
         eegs: list[Tensor] = [
             sample["eeg"] for sample in samples if isinstance(sample["eeg"], Tensor)
         ]  # fuck you pyright.
-        batch["eeg"] = torch.stack(eegs)
-        objects = [" " + object_word.lower().strip() for object_word in batch["object"]]
-        num_special_tokens = len(start_token_id_sequence) + 1
-        batch["input_ids"] = tokenizer.batch_encode_plus(
+        batch["eeg"] = get_spectrogram(torch.stack(eegs), n_fft, fft_hop_length)
+        # We are doing all of the special tokens manually because (1) We do not trust HF, and (2) we have more control.
+        # Here we add the stop token manually because it will then be included in the _attended to region_ of the attenton mask.
+        # Which is not the default behaviour if we have `add_special_tokens=False`, because then all added tokens are treated like padding (i.e., not attended to).
+        objects = [
+            " " + object_word.lower().strip() + stop_token
+            for object_word in batch["object"]
+        ]
+        tokenizer_out = tokenizer.batch_encode_plus(
             objects,
-            padding="max_length",
-            truncation=True,
-            max_length=max_length
-            - num_special_tokens,  # We are going to add the start and end tokens after the fact.
+            padding=True,
+            add_special_tokens=False,
             return_tensors="pt",
-        )["input_ids"]
+        )
+        batch["attention_mask"] = torch.cat(
+            (tokenizer_out["input_ids"], torch.zeros(batch_size, 1))
+        )
         batch["input_ids"] = torch.cat(
             (  # type: ignore
                 torch.tile(start_token_id_sequence, (batch_size, 1)),
-                batch["input_ids"],
+                tokenizer_out["input_ids"],
                 torch.full((batch_size, 1), stop_token_id),
             ),
             dim=1,

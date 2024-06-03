@@ -10,7 +10,7 @@ import yaml
 from .components.attention import MultiHeadAttention
 from .components.norm import LayerNorm
 
-from transformers import WhisperModel, WhisperConfig
+from transformers import WhisperModel, WhisperConfig, WhisperTokenizer
 
 
 @dataclass
@@ -24,6 +24,7 @@ class TelepathConfig:
     encoder_block_size: int
     decoder_block_size: int
     n_freqs: int
+    fft_hop_length: int
     d_model: int
     n_heads: int
     encoder_n_layers: int
@@ -52,12 +53,17 @@ class TelepathConfig:
             )
             return
         pt_whisper_config = WhisperConfig.from_pretrained(self.pretrained_whisper)
+        # Please translate from the neural code to english please.
         tokenizer = WhisperModel.from_pretrained(
             self.pretrained_whisper, task="translate", language="english"
         )
         assert isinstance(tokenizer, WhisperModel)
         self.decoder_vocab_size = pt_whisper_config.vocab_size
-        self.n_freqs = pt_whisper_config.n_freqs
+        # TODO:
+        # We want to the channel dimension of the spectrogram to align with the channel dimension of the whisper feature extractor.
+        # It is an open question whether or not doing a straight exrtraction of the N equidistant frequencies is the best approach,
+        # or whether we should instead construct a neural equivalent of the mel scale.
+        self.n_freqs = pt_whisper_config.n_mels
         self.d_model = pt_whisper_config.d_model
         self.n_heads = self.n_heads or pt_whisper_config.n_heads
         self.encoder_n_layers = (
@@ -122,10 +128,23 @@ class ResidualAttentionBlock(nn.Module):
         )
         self.mlp_ln = LayerNorm(d_model)
 
-    def forward(self, x: Tensor, kv_cache: dict[int, Tensor] | None = None) -> Tensor:
-        x = x + self.attn(self.attn_ln(x))
+    def forward(
+        self,
+        x: Tensor,
+        xc: Tensor,
+        attention_mask: Tensor,
+        kv_cache: dict[int, Tensor] | None = None,
+    ) -> Tensor:
+        x = x + self.attn(
+            self.attn_ln(x), attenton_mask=attention_mask, kv_cache=kv_cache
+        )
         if self.cross_attn and self.cross_attn_ln:
-            x = x + self.cross_attn(self.cross_attn_ln(x), kv_cache=kv_cache)
+            x = x + self.cross_attn(
+                self.cross_attn_ln(x),
+                xc,
+                attention_mask=attention_mask,
+                kv_cache=kv_cache,
+            )
         x = x + self.mlp(self.mlp_ln(x))
         return x
 
@@ -227,13 +246,14 @@ class TextDecoder(nn.Module):
         self,
         x: Tensor,
         xc: Tensor | None = None,
+        attention_mask: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
         inference: bool = False,
     ) -> Tensor:
         offset = kv_cache[next(iter(kv_cache.values()))].size(0) if kv_cache else 0
         x = self.embed_tokens(x) + self.embed_positions[offset : offset + x.size(1)]
         for block in self.blocks:
-            x = block(x, xc, kv_cache=kv_cache)
+            x = block(x, xc, attention_mask=attention_mask, kv_cache=kv_cache)
         x = self.ln_post(x)
         if inference:
             x = x[:, -1, :]
