@@ -1,3 +1,4 @@
+from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
@@ -51,7 +52,7 @@ class MetricType(Enum):
 
 Loggable = int | float
 Plottable = list[tuple[float, float]]
-MetricState = int | float | Tensor | list | None
+MetricState = int | float | Tensor | list | dict | None
 # TODO: Should this be dataclass with explicit possible values?
 InferenceArtefacts = (
     Mapping[str, Tensor | float | int | list[str]]
@@ -103,7 +104,7 @@ def all_gather_concat(t: Tensor | list, ws: int) -> Tensor:
     return out
 
 
-def all_gather_extend(t: Tensor | list, ws: int) -> list:
+def all_gather_append(t: Tensor | list, ws: int) -> list:
     assert isinstance(t, list)
     out = [None] * ws
     all_gather_object(out, t)
@@ -125,35 +126,41 @@ def position_in_epoch(inference_artefacts: InferenceArtefacts) -> int:
     return out
 
 
-def get_accuracy(target_and_predicted_ids: Tensor) -> float:
+def flatten_ranks(root: list[dict[str, list[Any]]]) -> dict[str, list[Any]]:
+    out = defaultdict(list)
+    for rank in root:
+        for key, item in rank.items():
+            out[key].extend(item)
+    return out
+
+
+def get_accuracy(generations: list[dict[str, list[str]]]) -> float:
     """Slightly less naiive accuracy calculation."""
-    target_ids, predicted_ids = target_and_predicted_ids
-    N, T = target_ids.size()
-    batch_pred_text = TOKENIZER.batch_decode(predicted_ids, skip_special_tokens=True)
-    batch_true_text = TOKENIZER.batch_decode(target_ids, skip_special_tokens=True)
     accuracy = 0
-    for pred_text, true_text in zip(batch_pred_text, batch_true_text):
+    flattened_generations = flatten_ranks(generations)
+    for target_text, pred_text in zip(
+        flattened_generations["targets"], flattened_generations["predictions"]
+    ):
         # TODO: This should be done in the data processing stage - check!.
-        true_text = true_text.lower().strip()
+        target_text = target_text.lower().strip()
         pred_text = pred_text.lower().strip()
         # Using `in` allows to account for noise in the generation at the expense of speed.
         pred_text_is_synonym = any(
             [synonym in pred_text for synonym in SYNONYM_MAP.get("true_text") or []]
         )
-        if true_text in pred_text or pred_text_is_synonym:
-            accuracy += 1 / len(batch_pred_text)
+        if target_text in pred_text or pred_text_is_synonym:
+            accuracy += 1 / len(flattened_generations["predictions"])
     return accuracy
 
 
-def construct_table(generations: list[list[dict[str, str]]]) -> dict:
+def construct_table(generations: list[dict[str, list[str]]]) -> dict:
     """Construct a wandb table for logging generations.
 
     Generations from each rank are nested in batches."""
     out = wandb.Table(columns=["Target", "Prediction"])
-    for rank_generations in generations:
-        for batch_generations in rank_generations:
-            for generation in batch_generations:
-                out.add_data(generation["target"], generation["prediction"])
+    column_data = flatten_ranks(generations)
+    for target, prediction in zip(column_data["target"], column_data["prediction"]):
+        out.add_data(target, prediction)
     return out
 
 
@@ -294,15 +301,15 @@ METRICS = {
         MetricType.GENERATION,
         False,
         transform_fn=identity,
-        reduce_fn=all_gather_concat,
-        compute_fn=...,
+        reduce_fn=all_gather_append,
+        compute_fn=get_accuracy,
     ),
     MetricKey.VAL_GENERATIONS: Metric(
         None,
         MetricType.GENERATION,
         False,
         transform_fn=identity,
-        reduce_fn=all_gather_extend,
+        reduce_fn=all_gather_append,
         compute_fn=construct_table,
     ),
 }

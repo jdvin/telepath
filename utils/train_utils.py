@@ -1,4 +1,5 @@
 from dataclasses import asdict, dataclass
+from collections import defaultdict
 import math
 from typing import Any, Callable, Iterator
 import os
@@ -247,45 +248,29 @@ def run_eval(
     # Accumulate losses, logits, and labels for all batches in the validation set.
     # More memory efficient to accumulate as we go, but if we perform the calculation at the end,
     # then it is more mathematically correct and we can more easily calculate metrics across all labels in the val set.
-    (
-        all_losses,
-        all_logits,
-        all_labels,
-        all_generations,
-        all_target_generations,
-    ) = (
-        [],
-        [],
-        [],
-        [],
-        [],
-    )
+    losses = []
+
+    generations = defaultdict(list)
     for _ in range(len(val_dataloader)):
         micro_batch = get_microbatch(val_dataloader_iterator, device)
-        if MetricType.GENERATION.value in ds_key:
-            generated_ids: list[list[int]] = model.model.generate(
-                micro_batch["input_features"],
-                attention_mask=micro_batch["audio_attention_mask"],
-            )
-            all_generations.extend(
-                model.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
-            )
-            all_target_generations.extend(
-                model.tokenizer.batch_decode(
-                    micro_batch["input_ids"], skip_special_tokens=True
-                )
-            )
-        else:
-            out = model.step(micro_batch)
 
-            all_losses.append(out["loss"])
+        enc, _, loss = model.step(micro_batch)
+        generated_ids: list[list[int]] = model.model.module.generate(
+            enc=enc, device=device
+        )
+        generations["predictions"].extend(
+            model.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+        )
+        generations["targets"].extend(
+            model.tokenizer.batch_decode(
+                micro_batch["input_ids"], skip_special_tokens=True
+            )
+        )
 
-            if has_classification_metrics:
-                all_logits.append(out["logits"])
-                all_labels.append(micro_batch["labels"])
+        losses.append(loss)
 
         val_pbar.update()
 
-    all_losses = torch.tensor(all_losses)
-    metrics["val_loss"].update(all_losses.mean().item())
-    metrics["val_loss"].log(f"val_loss_{ds_key}")
+    losses = torch.tensor(losses)
+    metrics["val_loss"].update(losses.mean().item())
+    metrics["val_loss"].log("val_loss")

@@ -335,28 +335,35 @@ class Telepath(nn.Module):
         self.start_sequence = config.decoder_start_sequence
         self.stop_token = config.decoder_stop_token
 
-    def forward(self, eeg: Tensor, input_ids: Tensor) -> Tensor:
+    def forward(self, eeg: Tensor, input_ids: Tensor) -> tuple[Tensor, Tensor | None]:
         """Forward pass through the Telepath model.
 
         Attributes:
             eeg_signal: EEG signal of shape (batch_size, n_samples, n_channels).
             input_ids: Input token ids of shape (batch_size, n_tokens).
         """
-        return self.decoder(input_ids, xc=self.encoder(eeg))
+        enc = self.encoder(eeg)
+        return self.decoder(input_ids, xc=enc), enc
 
     @torch.no_grad()
     def generate(
-        self, eeg: Tensor, device: str, stop_token: int | None = None
+        self,
+        eeg: Tensor | None = None,
+        enc: Tensor | None = None,
+        device: str = "cuda",
+        stop_token: int | None = None,
     ) -> list[list[int]]:
         """Generate a sequence of tokens given an EEG signal.
         Attributes:
             eeg_signal: EEG signal of shape (batch_size, n_samples, n_channels).
             stop_token: Token id to stop generation at.
         """
-        assert len(eeg.size()) == 3
-        B = eeg.size(0)
-        eeg = eeg.to(device)
-        enc = self.encoder(eeg)
+        if eeg is not None:
+            assert len(eeg.size()) == 3
+            eeg = eeg.to(device)
+            enc = self.encoder(eeg)
+        assert enc is not None
+        B = enc.size(0)
         return self.decoder.generate(
             input_ids=self.start_sequence.repeat(B, 1).detach().to(device),
             embed=enc,
