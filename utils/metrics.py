@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Mapping
 
+import pandas as pd
 import torch
 from torch import Tensor, tensor
 from torch.distributed import (
@@ -14,7 +15,6 @@ from torch.distributed import (
 )
 import wandb
 from transformers import WhisperTokenizer
-from wandb import plot
 
 THINGS_CONCEPTS_PATH = "data/things_concepts.csv"
 SYNONYM_MAP = {
@@ -27,10 +27,6 @@ SYNONYM_MAP = {
         ["Word", "WordNet Synonyms"]
     ].values
 }
-# Lazy HACK for now.
-TOKENIZER = WhisperTokenizer.from_pretrained(
-    "openai/whisper-v3-large", task="translation", language="en"
-)
 
 
 class MetricLogType(Enum):

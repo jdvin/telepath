@@ -1,0 +1,3 @@
+n_eeg_channels: 63
+pretrained_whisper: openai/whisper-tiny
+fft_hop_length: 1

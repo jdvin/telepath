@@ -3,8 +3,10 @@ from typing import List, Sequence, Iterable
 
 import numpy as np
 import torch
-from torch import nn, Tensor
+from torch import nn, Tensor, tensor
 import torch.nn.functional as F
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 import yaml
 
 from .components.attention import MultiHeadAttention
@@ -16,20 +18,20 @@ from transformers import WhisperModel, WhisperConfig, WhisperTokenizer
 @dataclass
 class TelepathConfig:
     n_eeg_channels: int
-    pretrained_whisper: str
-    decoder_start_sequence: Tensor
-    decoder_stop_token: int
-    decoder_special_tokens_start: int
-    decoder_vocab_size: int
-    encoder_block_size: int
-    decoder_block_size: int
-    n_freqs: int
-    fft_hop_length: int
-    d_model: int
-    n_heads: int
-    encoder_n_layers: int
-    decoder_n_layers: int
-    dropout = 0.1
+    pretrained_whisper: str | None
+    decoder_start_sequence: Tensor = tensor([])
+    decoder_stop_token: int = 0
+    decoder_special_tokens_start: int = 0
+    decoder_vocab_size: int = 0
+    encoder_block_size: int = 0
+    decoder_block_size: int = 0
+    n_freqs: int = 0
+    fft_hop_length: int = 0
+    d_model: int = 0
+    n_heads: int = 0
+    encoder_n_layers: int = 0
+    decoder_n_layers: int = 0
+    dropout: float = 0.1
 
     @classmethod
     def from_yaml(cls, path: str):
@@ -54,23 +56,27 @@ class TelepathConfig:
             return
         pt_whisper_config = WhisperConfig.from_pretrained(self.pretrained_whisper)
         # Please translate from the neural code to english please.
-        tokenizer = WhisperModel.from_pretrained(
+        tokenizer = WhisperTokenizer.from_pretrained(
             self.pretrained_whisper, task="translate", language="english"
         )
-        assert isinstance(tokenizer, WhisperModel)
+        assert isinstance(tokenizer, WhisperTokenizer)
         self.decoder_vocab_size = pt_whisper_config.vocab_size
         # TODO:
         # We want to the channel dimension of the spectrogram to align with the channel dimension of the whisper feature extractor.
         # It is an open question whether or not doing a straight exrtraction of the N equidistant frequencies is the best approach,
         # or whether we should instead construct a neural equivalent of the mel scale.
-        self.n_freqs = pt_whisper_config.n_mels
+        self.n_freqs = pt_whisper_config.num_mel_bins
         self.d_model = pt_whisper_config.d_model
-        self.n_heads = self.n_heads or pt_whisper_config.n_heads
+        assert (
+            pt_whisper_config.decoder_attention_heads
+            == pt_whisper_config.encoder_attention_heads
+        )
+        self.n_heads = pt_whisper_config.encoder_attention_heads
         self.encoder_n_layers = (
-            self.encoder_n_layers or pt_whisper_config.encoder_n_layers
+            self.encoder_n_layers or pt_whisper_config.encoder_layers
         )
         self.decoder_n_layers = (
-            self.decoder_n_layers or pt_whisper_config.decoder_n_layers
+            self.decoder_n_layers or pt_whisper_config.decoder_layers
         )
         assert isinstance(tokenizer.prefix_tokens, list)
         self.decoder_start_sequence = torch.tensor(tokenizer.prefix_tokens)
@@ -113,7 +119,12 @@ class ResidualAttentionBlock(nn.Module):
 
         self.cross_attn = (
             MultiHeadAttention(
-                n_heads, d_model, k_bias=True, block_size=block_size, dropout=dropout
+                n_heads,
+                d_model,
+                scale=(d_model // n_heads) ** -0.25,
+                k_bias=True,
+                block_size=block_size,
+                dropout=dropout,
             )
             if cross_attn
             else None
@@ -335,7 +346,15 @@ class Telepath(nn.Module):
         self.start_sequence = config.decoder_start_sequence
         self.stop_token = config.decoder_stop_token
 
-    def forward(self, eeg: Tensor, input_ids: Tensor) -> tuple[Tensor, Tensor | None]:
+        # Translate from neural code to english please.
+        assert isinstance(self.config.pretrained_whisper, str)
+        self.tokenizer = WhisperTokenizer.from_pretrained(
+            self.config.pretrained_whisper, task="translation", language="en"
+        )
+
+    def forward(
+        self, eeg: Tensor, input_ids: Tensor, attention_mask: Tensor | None
+    ) -> tuple[Tensor, Tensor]:
         """Forward pass through the Telepath model.
 
         Attributes:
@@ -343,7 +362,51 @@ class Telepath(nn.Module):
             input_ids: Input token ids of shape (batch_size, n_tokens).
         """
         enc = self.encoder(eeg)
-        return self.decoder(input_ids, xc=enc), enc
+        return self.decoder(input_ids, xc=enc, attention_mask=attention_mask), enc
+
+    def step(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor, Tensor]:
+        (
+            eeg,
+            token_ids,
+            decoder_attention_mask,
+        ) = (batch["input_features"], batch["input_ids"], batch["attention_mask"])
+
+        # Remove the last token from the logits, as we don't need to predict the padding token.
+        logits, enc = self.forward(
+            eeg, token_ids, attention_mask=decoder_attention_mask
+        )
+        logits = logits[:, :-1, :].contiguous()
+        # Flatten logits tensor (B x T-1 x V) to 2D tensor ((B T-1) x V) for loss calculation.
+        logits = logits.view(-1, logits.size(-1))
+        # Shift and flatten labels (B x T) to 1D tensor (B T-1).
+        labels = token_ids[:, 1:].contiguous().view(-1)
+        # Mask special tokens.
+        labels[labels >= self.config.decoder_special_tokens_start] = -100
+        loss = F.cross_entropy(logits, labels, ignore_index=-100)
+        return enc, logits, loss
+
+    def configure_optimizers(
+        self, num_batches: int, max_lr: float, weight_decay: float, warmup_frac: float
+    ):
+        optimizer = AdamW(
+            [p for p in self.parameters() if p.requires_grad],
+            lr=max_lr,
+            weight_decay=weight_decay,
+        )
+        warmup_batches = int(num_batches * warmup_frac)
+        warmup_scheduler = LinearLR(
+            optimizer, start_factor=0.01, end_factor=1, total_iters=warmup_batches
+        )
+        decay_scheduler = CosineAnnealingLR(optimizer, T_max=num_batches)
+        scheduler = SequentialLR(
+            optimizer, [warmup_scheduler, decay_scheduler], milestones=[warmup_batches]
+        )
+        return optimizer, scheduler
+
+    @property
+    def module(self):
+        """For interoperability with DDP"""
+        return self
 
     @torch.no_grad()
     def generate(

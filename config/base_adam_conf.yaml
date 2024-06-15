@@ -1,7 +1,0 @@
-optim: adamw
-optim_params:
-  lr: 1e-5
-  betas: [0.9, 0.99]
-  eps: 1e-2
-  weight_decay: 1e-2
-lr_scheduler: cosine

@@ -34,21 +34,18 @@ from utils.metrics import (
 )
 
 from src.telepath import TelepathConfig, Telepath
-from src.wrapper import Trainer
 
 parser = argparse.ArgumentParser(description="Train a model.")
-parser.add_argument("--run_project", type=str, required=True)
-parser.add_argument("--run_name", type=str, required=True)
-parser.add_argument("--run_group", type=str, required=True)
-parser.add_argument("--eval_first", action="store_true")
+parser.add_argument("--run-project", type=str, required=True)
+parser.add_argument("--run-name", type=str, required=True)
+parser.add_argument("--run-group", type=str, required=True)
+parser.add_argument("--eval-first", action="store_true")
 parser.add_argument("--device", type=str)
-parser.add_argument(
-    "--dtype", type=str, choices=["fp32", "fp16", "bf16"], default="fp16"
-)
-parser.add_argument("--training_config_path", type=str, default=None)
-parser.add_argument("--model_config_path", type=str, default=None)
-parser.add_argument("--world_size", type=int, default=1)
+parser.add_argument("--training-config-path", type=str, default=None)
+parser.add_argument("--model-config-path", type=str, default=None)
+parser.add_argument("--world-size", type=int, default=1)
 parser.add_argument("--checkpoints", action="store_true", default=False)
+parser.add_argument("--reset-data-cache", action="store_true", default=False)
 
 
 def main(
@@ -61,8 +58,8 @@ def main(
     run_name: str,
     eval_first: bool,
     device: str,
-    dtype: str,
     checkpoints: bool,
+    reset_data_cache: bool,
 ):
     cfg = TrainingConfig(
         **load_yaml(training_config_path),
@@ -74,7 +71,6 @@ def main(
         run_group=run_group,
         eval_first=eval_first,
         device=device,
-        dtype=dtype,
         checkpoints=checkpoints,
     )
     grad_accum_steps = cfg.batch_size // (cfg.micro_batch_size * cfg.world_size)
@@ -91,13 +87,14 @@ def main(
         training_config=cfg,
         model_config=model_config,
     )
-
+    rank = rank if world_size > 1 else device
+    is_main_process = rank in {"cuda:0", "cuda", 0, "cpu", "mps"}
     logger.info("Creating model instance.")
     # Create model.
-    trainer: Trainer = Trainer(model_config_path, device=rank)
-    model: Telepath = trainer.model
+    model_config = TelepathConfig(**load_yaml(model_config_path))
+    model: Telepath = Telepath(model_config)
+    model.to(rank)
     assert isinstance(model, Telepath)
-    assert not isinstance(model.module, torch.Tensor)
     assert not isinstance(model.module.configure_optimizers, torch.Tensor)
     assert isinstance(model.module, nn.Module)
     log_model_details(model.module)
@@ -107,12 +104,20 @@ def main(
     # The first rank goes ahead to create the dataset if it does not already exist, before the other ranks then load it.
     # This is probably quite a strange pattern, but it is the simplest way to implement this behaviour.
     # TODO: Distributed dataset creation.
-    if rank == 0:
-        ds = extract_things_100ms_ds(root_dir=cfg.dataset_path, subjects=cfg.subjects)
-    dist.barrier()
-    ds = extract_things_100ms_ds(root_dir=cfg.dataset_path, subjects=cfg.subjects)
+    if is_main_process:
+        ds = extract_things_100ms_ds(
+            root_dir=cfg.dataset_path,
+            subjects=cfg.subjects,
+            reset_cache=reset_data_cache,
+        )
+    if world_size > 1:
+        dist.barrier()
+        if rank != 0:
+            ds = extract_things_100ms_ds(
+                root_dir=cfg.dataset_path, subjects=cfg.subjects
+            )
     collate_fn = get_collate_fn(
-        trainer.tokenizer,
+        model.tokenizer,
         model.start_sequence,
         model.stop_token,
         model.stop_token,
@@ -137,14 +142,14 @@ def main(
         "fp32": torch.float32,
         "fp16": torch.float16,
         "bf16": torch.bfloat16,
-    }[dtype]
+    }[cfg.dtype]
     device_type = "cuda" if "cuda" in device else "cpu"
     scaler_context = (
         nullcontext()
-        if dtype == "fp32"
+        if cfg.dtype == "fp32"
         else autocast(device_type=device_type, dtype=torch_dtype)
     )
-    scaler = GradScaler(enabled=dtype == "fp16")
+    scaler = GradScaler(enabled=cfg.dtype == "fp16")
 
     logger.info("Creating optimizer.")
 
@@ -165,7 +170,8 @@ def main(
             MetricKey.LR,
             MetricKey.EPOCH,
             MetricKey.VAL_LOSS,
-            *model.module.metrics,
+            MetricKey.VAL_ACCURACY,
+            MetricKey.VAL_GENERATIONS,
         ],
         device=rank,
         world_size=world_size,
@@ -192,6 +198,7 @@ def main(
             val_sampler=val_sampler,
             metrics=metrics,
             device=rank,
+            config=cfg,
         )
 
     while True:
@@ -204,8 +211,8 @@ def main(
         )
         with ddp_context:
             with scaler_context:
-                out = model.module.step(micro_batch)
-                loss = out["loss"] / grad_accum_steps
+                _, _, loss = model.module.step(micro_batch)
+                loss = loss / grad_accum_steps
             metrics["train_loss"].update(loss.item())
             # Get the next batch straight away without blocking whilst we compute the backward pass,
             # unless we are at the end of the epoch.
@@ -239,16 +246,17 @@ def main(
                 val_sampler=val_sampler,
                 metrics=metrics,
                 device=rank,
+                config=cfg,
             )
 
         if metrics["step"].value % cfg.log_interval == 0:
             for key, metric in metrics.items():
                 if metric.log_every_step:
                     metric.log(key)
-            if rank == 0:
+            if is_main_process:
                 wandb.log({}, commit=True)
         if metrics["step"].value % steps_per_epoch == 0:
-            if rank == 0 and checkpoints:
+            if is_main_process and checkpoints:
                 torch.save(
                     model.module,
                     f"checkpoints/{run_name}/{cfg.run_project}_{cfg.run_group}_{cfg.run_name}_ep{metrics['epoch'].value}.pt",
@@ -298,6 +306,7 @@ if __name__ == "__main__":
                 args.device,
                 args.dtype,
                 args.checkpoints,
+                args.reset_data_cache,
             ),
             nprocs=args.world_size,
             join=True,

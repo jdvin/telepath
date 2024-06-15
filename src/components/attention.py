@@ -79,7 +79,7 @@ class MultiHeadAttention(torch.nn.Module):
             attn = self.attn_dropout(attn)
             # (B, nhead, T, T) x (B, nhead, T, D_head) -> (B, nhead, T, D_head).
             y = attn @ v
- self.bias[:, :, :T, :T] == 0       return y
+        return y
 
     def forward(
         self,

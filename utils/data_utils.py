@@ -1,15 +1,15 @@
-import argparse
 from enum import Enum
 import os
 from typing import Callable, Any
-import time
 
+from loguru import logger
 import numpy as np
 import pandas as pd
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
+from tqdm import tqdm
 
 
 class ValidationType(Enum):
@@ -94,7 +94,7 @@ SESSION_EPOCHS = {"train": 16800, "test": 4080}
 
 
 def get_spectrogram(signal: torch.Tensor, n_fft: int, hop_length: int):
-    window = torch.hann_window(n_fft).to(signal.device)
+    window = torch.hann_window(n_fft)
     stft = torch.stft(signal, n_fft, hop_length, window=window, return_complex=True)
     return stft.abs() ** 2
 
@@ -145,6 +145,8 @@ def extract_things_100ms_ds(
     use the common indexing scheme of THINGS between the training and test sets to begin with?
     """
     ds_str = "".join([str(sub) for sub in subjects]) + str(epoch_start) + str(epoch_end)
+    epoch_length = epoch_end - epoch_start
+    target_obj_onset_idx = -1 * epoch_start
     if validation_type != ValidationType.DEFAULT:
         raise NotImplementedError("Only default validation type is supported atm.")
     # Keys are coded: `{split_type}_img_concepts_THINGS`.
@@ -160,20 +162,25 @@ def extract_things_100ms_ds(
 
     training_file_path = f"{root_dir}/{ds_str}_train.npy"
     test_file_path = f"{root_dir}/{ds_str}_test.npy"
-    cached = os.path.exists(training_file_path) and os.path.exists(test_file_path)
+    cached = (
+        os.path.exists(training_file_path) and os.path.exists(test_file_path)
+    ) and not reset_cache
+    logger.info(f"Using cached dataset: {cached}.")
     split_shape = lambda epochs_per_session: (
         len(subjects) * SESSIONS_PER_SUBJECT * epochs_per_session,
-        len(ELECTRODE_ORDER),
+        len(ELECTRODE_ORDER) + 1,  # +1 for the stimulus channel.
         epoch_end - epoch_start,
     )
 
     ds = {
         "train": np.memmap(
+            dtype=np.float32,
             filename=training_file_path,
             mode="r" if cached else "w+",
             shape=split_shape(SESSION_EPOCHS["train"]),
         ),
         "test": np.memmap(
+            dtype=np.float32,
             filename=test_file_path,
             mode="r" if cached else "w+",
             shape=split_shape(SESSION_EPOCHS["test"]),
@@ -181,9 +188,15 @@ def extract_things_100ms_ds(
     }
     if cached and not reset_cache:
         return ds
-
-    for i, sub in enumerate(subjects):
-        for j, ses in enumerate(range(1, SESSIONS_PER_SUBJECT + 1)):
+    total_rows = sum(
+        [
+            SESSION_EPOCHS[split_type] * SESSIONS_PER_SUBJECT * len(subjects)
+            for split_type in ds.keys()
+        ]
+    )
+    pbar = tqdm(total=total_rows, desc="Extracting EEG Data.")
+    for sub_i, sub in enumerate(subjects):
+        for ses_i, ses in enumerate(range(1, SESSIONS_PER_SUBJECT + 1)):
             for split_type in ["train", "test"]:
                 path = os.path.join(
                     root_dir,
@@ -202,6 +215,7 @@ def extract_things_100ms_ds(
                     ELECTRODE_ORDER[:, None] == ch_names
                 )
                 # Get the true THINGS id...
+                # TODO: Why do we do this first, why not as we are iterating through the epoch indexes?
                 stims = np.array(
                     [
                         (
@@ -219,18 +233,25 @@ def extract_things_100ms_ds(
                 data = np.vstack((stims, data))
                 # Get the index of each stimulus onset.
                 epoch_indexes = data[0, :].nonzero()[0]
-                for k in epoch_indexes:
+                for epoch_i, epoch_loc in enumerate(epoch_indexes):
                     # Get the absolute index of the current epoch.
                     n = (
-                        i * SESSIONS_PER_SUBJECT * SESSION_EPOCHS[split_type]
-                        + j * SESSION_EPOCHS[split_type]
-                        + k
+                        sub_i * SESSIONS_PER_SUBJECT * SESSION_EPOCHS[split_type]
+                        + ses_i * SESSION_EPOCHS[split_type]
+                        + epoch_i
                     )
                     # Slice the current epoch out of the data stream.
                     # rows x ch x time <- ch x time.
-                    ds[split_type][n, :, :] = data[:, k + epoch_start : k + epoch_end]
+                    ds[split_type][n, :, :] = data[
+                        :, epoch_loc + epoch_start : epoch_loc + epoch_end
+                    ]
+                    target_obj = ds[split_type][n, 0, target_obj_onset_idx].item()
                     # Label the stimulus channel at the start of the epoch.
-                    ds[split_type][n, 0, 0] = np.max(data[split_type][n, 0, :])
+                    ds[split_type][n, 0, :] = np.full(
+                        shape=epoch_length,
+                        fill_value=target_obj,
+                    )
+                    pbar.update(1)
 
     assert all([isinstance(value, np.memmap) for value in ds.values()])
     return ds
@@ -244,29 +265,30 @@ def get_collate_fn(
     n_fft: int,
     fft_hop_length: int,
     things_concepts_path: str = "data/things_concepts.csv",
-) -> Callable[[list[dict[str, Any]]], dict[str, torch.Tensor]]:
+) -> Callable[[list[np.memmap]], dict[str, torch.Tensor]]:
     # Load the map from object ID to word.
     things_concepts = pd.read_csv(things_concepts_path)
-    object_id_to_word = dict(zip(things_concepts["uniqueID"], things_concepts["Word"]))
     tokenizer.pad_token_id = pad_token_id
     stop_token = tokenizer.decode([stop_token_id])
 
     # Define transformation function with parameters.
     def collate_fn(
-        samples: list[dict[str, torch.Tensor | str]]
+        samples: list[np.memmap],
     ) -> dict[str, torch.Tensor]:
         batch_size = len(samples)
-        batch = {}
-        eegs: list[Tensor] = [
-            sample["eeg"] for sample in samples if isinstance(sample["eeg"], Tensor)
-        ]  # fuck you pyright.
-        batch["eeg"] = get_spectrogram(torch.stack(eegs), n_fft, fft_hop_length)
+        object_words = []
+        eeg_features = []
+        for sample in samples:
+            object_words.append(things_concepts["Word"][sample[0][0]])
+            eeg_features.append(
+                get_spectrogram(torch.tensor(sample[1:, :]), n_fft, fft_hop_length)
+            )
         # We are doing all of the special tokens manually because (1) We do not trust HF, and (2) we have more control.
-        # Here we add the stop token manually because it will then be included in the _attended to region_ of the attenton mask.
+        # Here we add the stop token manually because it will then be included in the _attended to_ region of the attenton mask.
         # Which is not the default behaviour if we have `add_special_tokens=False`, because then all added tokens are treated like padding (i.e., not attended to).
         objects = [
             " " + object_word.lower().strip() + stop_token
-            for object_word in batch["object"]
+            for object_word in object_words
         ]
         tokenizer_out = tokenizer.batch_encode_plus(
             objects,
@@ -274,18 +296,25 @@ def get_collate_fn(
             add_special_tokens=False,
             return_tensors="pt",
         )
-        batch["attention_mask"] = torch.cat(
-            (tokenizer_out["input_ids"], torch.zeros(batch_size, 1))
+        input_ids = tokenizer_out["input_ids"]
+        attention_mask = tokenizer_out["attention_mask"]
+        start_sequences = torch.tile(start_token_id_sequence, (batch_size, 1))
+        assert isinstance(attention_mask, Tensor)
+        decoder_attention_mask = torch.cat(
+            (torch.ones_like(start_sequences), attention_mask), dim=1
         )
-        batch["input_ids"] = torch.cat(
-            (  # type: ignore
-                torch.tile(start_token_id_sequence, (batch_size, 1)),
+        input_ids = torch.cat(
+            (
+                start_sequences,
                 tokenizer_out["input_ids"],
-                torch.full((batch_size, 1), stop_token_id),
-            ),
+            ),  # type: ignore
             dim=1,
         )
-
-        return batch
+        assert isinstance(eeg_features, list)
+        return {
+            "input_features": torch.stack(eeg_features),
+            "input_ids": input_ids,
+            "attention_mask": decoder_attention_mask,
+        }
 
     return collate_fn

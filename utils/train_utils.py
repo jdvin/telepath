@@ -14,11 +14,9 @@ import numpy as np
 import wandb
 import yaml
 
-from src.telepath import TelepathConfig
+from src.telepath import Telepath, TelepathConfig
 
-from .metrics import Metric, MetricType
-
-from ..src.wrapper import Trainer
+from utils.metrics import Metric, MetricType
 
 
 @dataclass
@@ -47,7 +45,6 @@ class TrainingConfig:
     training_config_path: str
     model_config_path: str
     checkpoints: bool
-    model_key: str
     dataset_path: str
     subjects: list[int]
     things_metadata_path: str
@@ -100,9 +97,6 @@ def setup(
     """Setup the environment for training."""
     torch.manual_seed(42 + rank)
     random.seed(42 + rank)
-    torch.cuda.set_device(rank)
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12355"
     if rank != 0:
         # Suppress output from all ranks except rank 0.
         logger.remove()
@@ -124,6 +118,10 @@ def setup(
             ),
         )
     if world_size > 1:
+        torch.cuda.set_device(rank)
+        os.environ["MASTER_ADDR"] = "localhost"
+        os.environ["MASTER_PORT"] = "12355"
+
         torch.distributed.init_process_group("nccl", rank=rank, world_size=world_size)
 
 
@@ -227,7 +225,7 @@ def get_dataloader_iterator(
 
 @torch.no_grad()
 def run_eval(
-    model: Trainer,
+    model: Telepath,
     val_dataloader: DataLoader,
     val_sampler: Sampler | None,
     metrics: dict[str, Metric],
@@ -255,9 +253,7 @@ def run_eval(
         micro_batch = get_microbatch(val_dataloader_iterator, device)
 
         enc, _, loss = model.step(micro_batch)
-        generated_ids: list[list[int]] = model.model.module.generate(
-            enc=enc, device=device
-        )
+        generated_ids: list[list[int]] = model.module.generate(enc=enc, device=device)
         generations["predictions"].extend(
             model.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
         )
