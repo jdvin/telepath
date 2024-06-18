@@ -121,7 +121,7 @@ def main(
         model.start_sequence,
         model.stop_token,
         model.stop_token,
-        model_config.n_freqs,
+        model_config.n_freqs * 2,
         model.config.fft_hop_length,
     )
     logger.info("Creating data loaders.")
@@ -183,7 +183,6 @@ def main(
         train_dataloader, train_sampler, metrics["epoch"].value  # type: ignore
     )
     micro_batch = get_microbatch(train_dataloader_iterator, rank)
-    dist.barrier()
     logger.info("Beginning Training.")
     train_pbar = tqdm(
         total=steps_per_epoch,

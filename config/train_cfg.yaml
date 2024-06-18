@@ -1,4 +1,4 @@
-dtype: fp16
+dtype: fp32
 dataset_path: data/things_eeg_100ms
 subjects:
   - 1

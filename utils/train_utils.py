@@ -74,10 +74,10 @@ def get_microbatch(
     device: str | int,
 ) -> dict[str, torch.Tensor]:
     micro_batch = next(dataloader_iterator)
-    if isinstance(device, int):
-        device = f"cuda:{device}"
     return {
         k: v.pin_memory().to(device=device, non_blocking=True)
+        if isinstance(device, int)
+        else v.to(device=device)
         for k, v in micro_batch.items()
         if isinstance(v, torch.Tensor)
     }

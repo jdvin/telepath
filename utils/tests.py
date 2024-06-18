@@ -4,11 +4,12 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 from torch.nn import functional as F
 
-from src.gpt import GPT, ExpertBlock
-from utils.data_utils import get_transform
+# from src.gpt import GPT
+from src.telepath import TelepathConfig, Telepath, TextDecoder
 
 
 def test_transform():
+    raise NotImplementedError()
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
     tokenizer.pad_token = tokenizer.eos_token
     transform = get_transform(
@@ -46,63 +47,65 @@ def test_transform():
     assert transformed_batch["input_ids"][:, -1].eq(50256).all().item()
 
 
-activatons = None
+# activatons = None
 
-tokenizer = AutoTokenizer.from_pretrained("gpt2")
-hf_gpt = AutoModelForCausalLM.from_pretrained("gpt2").eval()
-custom_gpt = GPT.from_pretrained("gpt2").eval()
-
-
-def test_embeddings():
-    global activations
-    inputs = tokenizer("The quick brown", return_tensors="pt")["input_ids"]
-
-    hf_emb = hf_gpt.transformer.wte(inputs)
-    custom_emb = custom_gpt.transformer.wte(inputs)
-    assert torch.equal(hf_emb, custom_emb)
-    pos = torch.arange(0, inputs.size(-1), dtype=torch.long)
-    hf_posemb = hf_gpt.transformer.wpe(pos)
-    custom_posemb = custom_gpt.transformer.wpe(pos)
-    assert torch.equal(hf_posemb, custom_posemb)
-
-    activations = hf_emb + hf_posemb
+# tokenizer = AutoTokenizer.from_pretrained("gpt2")
+# hf_gpt = AutoModelForCausalLM.from_pretrained("gpt2").eval()
 
 
-def test_layer_norm():
-    global activations
-    cus_opt = custom_gpt.transformer.blocks[0].ln_1(activations)
-    hf_opt = hf_gpt.transformer.h[0].ln_1(activations)
-    assert torch.allclose(cus_opt, hf_opt, atol=1e-3)
-    activations = hf_opt
+# def test_embeddings():
+#     global activations
+#     inputs = tokenizer("The quick brown", return_tensors="pt")["input_ids"]
+
+#     hf_emb = hf_gpt.transformer.wte(inputs)
+#     custom_emb = custom_gpt.transformer.wte(inputs)
+#     assert torch.equal(hf_emb, custom_emb)
+#     pos = torch.arange(0, inputs.size(-1), dtype=torch.long)
+#     hf_posemb = hf_gpt.transformer.wpe(pos)
+#     custom_posemb = custom_gpt.transformer.wpe(pos)
+#     assert torch.equal(hf_posemb, custom_posemb)
+
+#     activations = hf_emb + hf_posemb
 
 
-def test_attention():
-    global activations
-    cus_attn = custom_gpt.transformer.blocks[0].attn
-    hf_attn = hf_gpt.transformer.h[0].attn
-    cus_opt = cus_attn(activations)
-    hf_opt = hf_attn(activations)[0]
-    assert torch.allclose(cus_opt, hf_opt, atol=1e-3)
-    activations = hf_opt
+# def test_layer_norm():
+#     global activations
+#     cus_opt = custom_gpt.transformer.blocks[0].ln_1(activations)
+#     hf_opt = hf_gpt.transformer.h[0].ln_1(activations)
+#     assert torch.allclose(cus_opt, hf_opt, atol=1e-3)
+#     activations = hf_opt
 
 
-def test_mlp():
-    global activations
-    cus_mlp = custom_gpt.transformer.blocks[0].mlp
-    hf_mlp = hf_gpt.transformer.h[0].mlp
+# def test_attention():
+#     global activations
+#     cus_attn = custom_gpt.transformer.blocks[0].attn
+#     hf_attn = hf_gpt.transformer.h[0].attn
+#     cus_opt = cus_attn(activations)
+#     hf_opt = hf_attn(activations)[0]
+#     assert torch.allclose(cus_opt, hf_opt, atol=1e-3)
+#     activations = hf_opt
 
-    cus_opt = cus_mlp(activations)
-    hf_opt = hf_mlp(activations)
-    assert torch.allclose(cus_opt, hf_opt, atol=1e-2)
+
+# def test_mlp():
+#     global activations
+#     cus_mlp = custom_gpt.transformer.blocks[0].mlp
+#     hf_mlp = hf_gpt.transformer.h[0].mlp
+
+#     cus_opt = cus_mlp(activations)
+#     hf_opt = hf_mlp(activations)
+#     assert torch.allclose(cus_opt, hf_opt, atol=1e-2)
 
 
-iteration = 0
+# iteration = 0
 
 
 def test_generation():
     global iteration
     # TODO: Modify this to test for the continuous alignment of the embedding and the output tokens.
-    gpt2 = GPT.from_pretrained("gpt2")
+    config = TelepathConfig(
+        n_eeg_channels=63, pretrained_whisper="openai/whisper-tiny", fft_hop_length=1
+    )
+    dec = Telepath(config).decoder
     stop_token_id = 50256
     max_length = 10
 
@@ -118,12 +121,12 @@ def test_generation():
 
         out = F.one_hot(
             out,
-            gpt2.vocab_size,
+            dec.vocab_size,
         )
         iteration += 1
         return out
 
-    gpt2.forward = dummy_forward  # type: ignore
+    dec.forward = dummy_forward  # type: ignore
 
     # Ensure that we are not just getting lucky based on the order that the generations are completing (which depends on the embedding).
     for embeddings in [
@@ -136,7 +139,7 @@ def test_generation():
     ]:
         iteration = 0
         print(embeddings)
-        generations = gpt2.generate(
+        generations = dec.generate(
             input_ids=torch.tensor([[0], [0], [0]]),
             embed=embeddings,
             max_length=max_length,
@@ -151,88 +154,19 @@ def test_generation():
         ]
 
 
-def test_expert_gpt():
-    block = ExpertBlock(
-        n_heads=3,
-        d_model=9,
-        bias=True,
-        expert_block_size=2,
-        core_block_size=2,
-        dropout=0.0,
-        is_causal=True,
-        flash=True,
+def test_telepath():
+    config = TelepathConfig(
+        n_eeg_channels=63,
+        pretrained_whisper="openai/whisper-tiny",
+        fft_hop_length=1,
+        encoder_block_size=50,
+        decoder_block_size=10,
     )
 
-    # import pdb
+    model = Telepath(config)
 
-    # pdb.set_trace()
-    # block.attn.qkv_proj.weight.data = torch.tensor(
-    #     [
-    #         [0, 0, 0, 0],
-    #         [0, 0, 0, 0],
-    #         [1, 1, 1, 1],
-    #         [1, 1, 1, 1],
-    #         [0, 0, 0, 0],
-    #         [0, 0, 0, 0],
-    #         [1, 1, 1, 1],
-    #         [1, 1, 1, 1],
-    #         [0, 0, 0, 0],
-    #         [0, 0, 0, 0],
-    #         [1, 1, 1, 1],
-    #         [1, 1, 1, 1],
-    #     ],
-    #     dtype=torch.float,
-    # )
-    # block.attn.qkv_proj.bias.data = torch.tensor(
-    #     [1, 1, 1, 1],
-    #     dtype=torch.float,
-    # )
-    # block.attn.out_proj.weight.data = torch.tensor(
-    #     [
-    #         [1, 1, 1, 1],
-    #         [1, 1, 1, 1],
-    #         [1, 1, 1, 1],
-    #         [1, 1, 1, 1],
-    #     ],
-    #     dtype=torch.float,
-    # )
-    # block.attn.out_proj.bias.data = torch.tensor(
-    #     [1, 1, 1, 1],
-    #     dtype=torch.float,
-    # )
-    # block.attn.expert_qkv_proj.weight.data = torch.tensor(
-    #     [
-    #         [1, 1, 1, 1],
-    #         [1, 1, 1, 1],
-    #         [0, 0, 0, 0],
-    #         [0, 0, 0, 0],
-    #         [1, 1, 1, 1],
-    #         [1, 1, 1, 1],
-    #         [0, 0, 0, 0],
-    #         [0, 0, 0, 0],
-    #         [1, 1, 1, 1],
-    #         [1, 1, 1, 1],
-    #         [0, 0, 0, 0],
-    #         [0, 0, 0, 0],
-    #     ],
-    #     dtype=torch.float,
-    # )
-    # block.attn.expert_qkv_proj.bias.data = torch.tensor(
-    #     [1, 1, 1, 1],
-    #     dtype=torch.float,
-    # )
-
-    x = torch.tensor(
-        [
-            [
-                [0, 0, 0, 1, 1, 1, 2, 2, 2],
-                [0, 0, 0, 1, 1, 1, 2, 2, 2],
-                [1, 1, 1, 0, 0, 0, 0, 0, 0],
-                [1, 1, 1, 0, 0, 0, 0, 0, 0],
-            ]
-        ],
-        dtype=torch.float,
-    )
-
-    out = block(x)
-    assert out.shape == (1, 4, 9)
+    features = torch.rand(3, 63, 80, 100)
+    ipt_ids = torch.tensor([[0, 1], [0, 1], [0, 1]])
+    attention_mask = torch.ones_like(ipt_ids)
+    output = model(input_ids=ipt_ids, eeg=features, attention_mask=attention_mask)
+    assert output.shape == (3, 2)

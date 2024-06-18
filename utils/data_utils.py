@@ -93,12 +93,6 @@ SESSIONS_PER_SUBJECT = 4
 SESSION_EPOCHS = {"train": 16800, "test": 4080}
 
 
-def get_spectrogram(signal: torch.Tensor, n_fft: int, hop_length: int):
-    window = torch.hann_window(n_fft)
-    stft = torch.stft(signal, n_fft, hop_length, window=window, return_complex=True)
-    return stft.abs() ** 2
-
-
 class ThingsDataset(Dataset):
     def __init__(self, ds: np.memmap, things_metadata_path: str):
         self.ds = ds
@@ -255,6 +249,15 @@ def extract_things_100ms_ds(
 
     assert all([isinstance(value, np.memmap) for value in ds.values()])
     return ds
+
+
+def get_spectrogram(signal: torch.Tensor, n_fft: int, hop_length: int):
+    window = torch.hann_window(n_fft)
+    stft = torch.stft(
+        signal - signal.mean(), n_fft, hop_length, window=window, return_complex=True
+    )
+    # Freq 0 is not needed because the signal is normalized.
+    return stft[:, 1:, :-1].abs() ** 2
 
 
 def get_collate_fn(

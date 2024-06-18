@@ -40,49 +40,48 @@ class TelepathConfig:
         return cls(**config)
 
     def __post_init__(self):
-        if not self.pretrained_whisper:
-            assert (
-                self.n_freqs
-                and self.d_model
-                and self.n_heads
-                and self.decoder_vocab_size
-                and self.encoder_n_layers
-                and self.decoder_n_layers
-                and self.decoder_vocab_size
-                and self.decoder_start_sequence
-                and self.decoder_stop_token
-                and self.decoder_special_tokens_start
+        """There is definitely a better way."""
+        if self.pretrained_whisper:
+            pt_whisper_config = WhisperConfig.from_pretrained(self.pretrained_whisper)
+            # Please translate from the neural code to english please.
+            tokenizer = WhisperTokenizer.from_pretrained(
+                self.pretrained_whisper, task="translate", language="english"
             )
-            return
-        pt_whisper_config = WhisperConfig.from_pretrained(self.pretrained_whisper)
-        # Please translate from the neural code to english please.
-        tokenizer = WhisperTokenizer.from_pretrained(
-            self.pretrained_whisper, task="translate", language="english"
-        )
-        assert isinstance(tokenizer, WhisperTokenizer)
-        self.decoder_vocab_size = pt_whisper_config.vocab_size
-        # TODO:
-        # We want to the channel dimension of the spectrogram to align with the channel dimension of the whisper feature extractor.
-        # It is an open question whether or not doing a straight exrtraction of the N equidistant frequencies is the best approach,
-        # or whether we should instead construct a neural equivalent of the mel scale.
-        self.n_freqs = pt_whisper_config.num_mel_bins
-        self.d_model = pt_whisper_config.d_model
-        assert (
-            pt_whisper_config.decoder_attention_heads
-            == pt_whisper_config.encoder_attention_heads
-        )
-        self.n_heads = pt_whisper_config.encoder_attention_heads
-        self.encoder_n_layers = (
-            self.encoder_n_layers or pt_whisper_config.encoder_layers
-        )
-        self.decoder_n_layers = (
-            self.decoder_n_layers or pt_whisper_config.decoder_layers
-        )
-        assert isinstance(tokenizer.prefix_tokens, list)
-        self.decoder_start_sequence = torch.tensor(tokenizer.prefix_tokens)
-        assert isinstance(tokenizer.eos_token_id, int)
-        self.decoder_stop_token = tokenizer.eos_token_id
-        self.decoder_special_tokens_start = min(tokenizer.added_tokens_decoder.keys())
+            assert isinstance(tokenizer, WhisperTokenizer)
+            self.decoder_vocab_size = pt_whisper_config.vocab_size
+            # TODO:
+            # We want to the channel dimension of the spectrogram to align with the channel dimension of the whisper feature extractor.
+            # It is an open question whether or not doing a straight exrtraction of the N equidistant frequencies is the best approach,
+            # or whether we should instead construct a neural equivalent of the mel scale.
+            self.n_freqs = pt_whisper_config.num_mel_bins
+            self.d_model = pt_whisper_config.d_model
+            assert (
+                pt_whisper_config.decoder_attention_heads
+                == pt_whisper_config.encoder_attention_heads
+            )
+            self.n_heads = pt_whisper_config.encoder_attention_heads
+            self.encoder_n_layers = (
+                self.encoder_n_layers or pt_whisper_config.encoder_layers
+            )
+            self.decoder_n_layers = (
+                self.decoder_n_layers or pt_whisper_config.decoder_layers
+            )
+            assert isinstance(tokenizer.prefix_tokens, list)
+            self.decoder_start_sequence = torch.tensor(tokenizer.prefix_tokens)
+            assert isinstance(tokenizer.eos_token_id, int)
+            self.decoder_stop_token = tokenizer.eos_token_id
+            self.decoder_special_tokens_start = min(
+                tokenizer.added_tokens_decoder.keys()
+            )
+
+        for key, value in self.__dict__.items():
+            if key == "pretrained_whisper":
+                continue
+            if isinstance(value, Tensor):
+                assert value.numel() > 0, f"{key} is empty"
+            else:
+                assert value != 0, f"{key} is 0"
+                assert value is not None, f"{key} is None"
 
 
 def sinusoids(length: int, channels: int, max_timescale: int = 1000):
@@ -142,8 +141,8 @@ class ResidualAttentionBlock(nn.Module):
     def forward(
         self,
         x: Tensor,
-        xc: Tensor,
-        attention_mask: Tensor,
+        xc: Tensor | None = None,
+        attention_mask: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
     ) -> Tensor:
         x = x + self.attn(
@@ -163,6 +162,7 @@ class ResidualAttentionBlock(nn.Module):
 class NeuralEncoder(nn.Module):
     def __init__(
         self,
+        n_channels: int,
         n_freqs: int,
         block_size: int,
         d_model: int,
@@ -178,23 +178,27 @@ class NeuralEncoder(nn.Module):
             in_channels=n_freqs,
             out_channels=d_model,
             kernel_size=(1, 3),
-            padding=1,
+            padding=(0, 1),
         )
         self.conv2 = nn.Conv2d(
             in_channels=d_model,
             out_channels=d_model,
             kernel_size=(1, 3),
             stride=(1, 2),
-            padding=1,
+            padding=(0, 1),
         )
-        self.register_buffer("embed_positions", sinusoids(block_size, d_model))
-        self.embed_electrodes = nn.Embedding(n_freqs, d_model)
+        self.register_buffer(
+            "embed_positions",
+            sinusoids(block_size, d_model).t()[None, :, None, :].detach(),
+        )
+        self.embed_electrodes = nn.Embedding(n_channels, d_model)
 
         self.blocks = nn.ModuleList(
             ResidualAttentionBlock(block_size, d_model, n_heads, dropout=dropout)
             for _ in range(n_layers)
         )
         self.ln_post = LayerNorm(d_model)
+        self.d_model = d_model
 
     def forward(self, x: Tensor) -> Tensor:
         # (batch_size, n_ee_channels, n_freqs, sequence_length) -> (batch_size, n_freqs, n_eeg_channels, sequence_length).
@@ -206,11 +210,11 @@ class NeuralEncoder(nn.Module):
         x = F.gelu(self.conv1(x))
         x = F.gelu(self.conv2(x))
         x = (x + self.embed_positions).to(x.dtype)
-        x = x + self.embed_electrodes.weight
+        x = x + self.embed_electrodes.weight.t()[None, :, :, None]
         # Stack the electrode embeddings across the time dimension.
-        x = x.reshape(B, N_F, N_C * T)
+        x = x.reshape(B, self.d_model, N_C * (T // 2))
         for block in self.blocks:
-            x = block(x)
+            x = block(x=x)
         return x
 
     def optim_groups(self, weight_decay: float = 1e-1) -> list[dict[str, str]]:
@@ -283,7 +287,7 @@ class TextDecoder(nn.Module):
         Optimised for batch generation; pops generations off the inference stack as they complete.
         Attributes:
             input_ids: Input token ids of shape (batch_size, n_tokens).
-            concat_embed: Additional embeddings used by the model forward method. Must be of size (batch_size, k, d_model).
+            embed: Additional embeddings used by the model forward method. Must be of size (batch_size, k, d_model).
             max_length: Maximum length of the generated sequence.
             stop_token: Token id of the stop token.
         """
@@ -327,8 +331,9 @@ class Telepath(nn.Module):
         self.config = config
 
         self.encoder = NeuralEncoder(
+            n_channels=config.n_eeg_channels,
             n_freqs=config.n_freqs,
-            block_size=config.decoder_block_size,
+            block_size=config.encoder_block_size,
             d_model=config.d_model,
             n_heads=config.n_heads,
             n_layers=config.encoder_n_layers,

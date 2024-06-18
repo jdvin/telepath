@@ -7,7 +7,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 from .components.norm import LayerNorm
-from .components.attention import MultiheadAttention, ExpertAttention
+from .components.attention import MultiHeadAttention
 
 
 class Block(nn.Module):
@@ -22,7 +22,7 @@ class Block(nn.Module):
     ):
         super().__init__()
         self.ln_1 = LayerNorm(d_model, affine=True, bias=bias)
-        self.attn = MultiheadAttention(
+        self.attn = MultiHeadAttention(
             n_heads=n_heads,
             d_model=d_model,
             proj_bias=bias,
