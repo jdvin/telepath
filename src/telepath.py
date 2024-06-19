@@ -146,7 +146,7 @@ class ResidualAttentionBlock(nn.Module):
         kv_cache: dict[int, Tensor] | None = None,
     ) -> Tensor:
         x = x + self.attn(
-            self.attn_ln(x), attenton_mask=attention_mask, kv_cache=kv_cache
+            x=self.attn_ln(x), attention_mask=attention_mask, kv_cache=kv_cache
         )
         if self.cross_attn and self.cross_attn_ln:
             x = x + self.cross_attn(
@@ -212,7 +212,7 @@ class NeuralEncoder(nn.Module):
         x = (x + self.embed_positions).to(x.dtype)
         x = x + self.embed_electrodes.weight.t()[None, :, :, None]
         # Stack the electrode embeddings across the time dimension.
-        x = x.reshape(B, self.d_model, N_C * (T // 2))
+        x = x.reshape(B, N_C * (T // 2), self.d_model)
         for block in self.blocks:
             x = block(x=x)
         return x

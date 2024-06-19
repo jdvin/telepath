@@ -64,7 +64,7 @@ class MultiHeadAttention(torch.nn.Module):
                 q,
                 k,
                 v,
-                attn_mask=attention_mask,
+                attn_mask=attention_mask.bool(),
                 dropout_p=self.dropout if self.training else 0,
                 is_causal=self.is_causal,
                 scale=self.scale,
@@ -84,8 +84,9 @@ class MultiHeadAttention(torch.nn.Module):
     def forward(
         self,
         x: Tensor,
-        xc: Tensor | None,
+        xc: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
+        attention_mask: Tensor | None = None,
     ) -> tuple[Tensor]:
         B, T, D = x.size()  # Batch size, sequence length, model dimension.
         # Instantiate a 'dummy' kv cache to make the logic simpler.
@@ -113,7 +114,7 @@ class MultiHeadAttention(torch.nn.Module):
         k = self.split_heads(k, B, T, D)
         v = self.split_heads(v, B, T, D)
 
-        y = self.qkv_attention(q, k, v, T)
+        y = self.qkv_attention(q, k, v, T, attention_mask)
         # Flatten heads.
         y = y.transpose(1, 2).contiguous().view(B, T, D)
         y = self.out_proj(y)
