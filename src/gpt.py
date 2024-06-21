@@ -45,57 +45,6 @@ class Block(nn.Module):
         return x
 
 
-class ExpertBlock(Block):
-    def __init__(
-        self,
-        n_heads: int,
-        d_model: int,
-        bias: bool,
-        core_block_size: int,
-        expert_block_size: int,
-        dropout: float,
-        is_causal: bool = True,
-        flash: bool = True,
-    ):
-        super().__init__(
-            n_heads, d_model, bias, core_block_size + expert_block_size, dropout
-        )
-        self.attn = ExpertAttention(
-            n_heads=n_heads,
-            d_model=d_model,
-            core_proj_bias=bias,
-            expert_proj_bias=bias,
-            core_block_size=core_block_size,
-            expert_block_size=expert_block_size,
-            dropout=dropout,
-            is_causal=is_causal,
-            flash=flash,
-        )
-        self.expert_mlp = nn.Sequential(
-            nn.Linear(d_model, 4 * d_model, bias=bias),
-            nn.GELU(),
-            nn.Linear(4 * d_model, d_model, bias=bias),
-            nn.Dropout(dropout),
-        )
-
-        self.expert_block_size = expert_block_size
-        self.core_block_size = core_block_size
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.ln_1(x))
-        x_resid = x.clone()
-        x = self.ln_2(x)
-        x = x_resid + torch.cat(
-            (
-                self.expert_mlp(x[:, : self.expert_block_size, :]),
-                self.mlp(x[:, self.expert_block_size :, :]),
-            ),
-            dim=1,
-        )
-
-        return x
-
-
 class GPT(nn.Module):
     def __init__(
         self,

@@ -23,14 +23,14 @@ class Affine(nn.Module):
     def __init__(self, size, bias=True):
         super().__init__()
         self.size = size
-        self.weights = torch.nn.Parameter(torch.ones(self.size))
+        self.weight = torch.nn.Parameter(torch.ones(self.size))
         if bias:
             self.bias = torch.nn.Parameter(torch.zeros(self.size))
         else:
             self.register_buffer("bias", torch.zeros(self.size))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.weights * x + self.bias
+        return self.weight * x + self.bias
 
 
 class LayerNorm(nn.Module):

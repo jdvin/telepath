@@ -247,7 +247,7 @@ class TextDecoder(nn.Module):
     ):
         super().__init__()
         self.embed_tokens = nn.Embedding(n_vocab, d_model)
-        self.embed_positions = nn.Parameter(torch.zeros(n_ctx, d_model))
+        self.embed_positions = nn.Embedding(n_ctx, d_model)
         self.blocks = nn.ModuleList(
             ResidualAttentionBlock(n_ctx, d_model, n_head, cross_attn=True)
             for _ in range(n_layer)
@@ -266,7 +266,10 @@ class TextDecoder(nn.Module):
         inference: bool = False,
     ) -> Tensor:
         offset = kv_cache[next(iter(kv_cache.values()))].size(0) if kv_cache else 0
-        x = self.embed_tokens(x) + self.embed_positions[offset : offset + x.size(1)]
+        x = (
+            self.embed_tokens(x)
+            + self.embed_positions.weight[offset : offset + x.size(1)]
+        )
         for block in self.blocks:
             x = block(x, xc, attention_mask=attention_mask, kv_cache=kv_cache)
         x = self.ln_post(x)
@@ -450,19 +453,29 @@ class Telepath(nn.Module):
             "fc2": "mlp.2",
             "final_layer_norm": "mlp_ln.graph.2",
             "layer_norm": "ln_post.graph.2",
+            "encoder_attn": "cross_attn",
+            "encoder_attn_layer_norm": "cross_attn_ln.graph.2",
         }
         map_params = lambda pn: ".".join(
             [param_map.get(seg, seg) for seg in pn.split(".")]
         )
         nw = cls(config)
+        new_keys = list(nw.state_dict().keys())
         nw_sd = nw.state_dict()
         for key, param in ptw.state_dict().items():
+            if key == "encoder.embed_positions.weight":
+                # We generate this ourselves with the sinuisoids function.
+                continue
             new_key = map_params(key)
+            assert new_key in new_keys, f"{new_key}"
             # We are moving from a 1D conv to a 2D conv, but we want the conv to be the same for each eletrode.
             # NOTE: Do we want to have unique params for each electrode?
             # Could then initialize from the same weights but have them learn different filters.
-            if "conv" in key:
-                param = param.unsqueeze(2)
+            if "conv" in key and "weight" in key:
+                param = param.unsqueeze(-2)
+
+            if key == "decoder.embed_positions.weight":
+                param = param[: config.decoder_block_size, :]
 
             nw_sd[new_key] = param
         nw.load_state_dict(nw_sd)

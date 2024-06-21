@@ -54,11 +54,17 @@ class MultiHeadAttention(torch.nn.Module):
         q: Tensor,
         k: Tensor,
         v: Tensor,
-        T: int,
         attention_mask: Tensor | None = None,
     ) -> Tensor:
+        T_q: int = q.size(2)
+        T_kv: int = k.size(2)
+        B = q.size(0)
         if attention_mask is None:
-            attention_mask = torch.ones(T, T)
+            attention_mask = torch.ones(B, self.n_heads, T_q, T_kv)
+        else:
+            attention_mask = attention_mask[:, None, :, None].expand(
+                B, self.n_heads, T_q, T_kv
+            )
         if self.flash:
             y = F.scaled_dot_product_attention(
                 q,
@@ -69,11 +75,12 @@ class MultiHeadAttention(torch.nn.Module):
                 is_causal=self.is_causal,
                 scale=self.scale,
             )
+
         else:
-            # (B, nhead, T, D_head) x (B, nhead, D_head, T) -> (B, nhead, T, T).
+            # (B, nhead, T_q, D_head) x (B, nhead, D_head, T_kv) -> (B, nhead, T_q, T_kv).
             qk = (q @ k.transpose(-2, -1)) * self.scale
             # Fill the upper triangle. Effectively a no-op if not causal.
-            mask = torch.bitwise_or(self.bias[:, :, :T, :T] == 0, attention_mask == 0)  # type: ignore
+            mask = torch.bitwise_or(self.bias[:, :, :T_q, :T_kv] == 0, attention_mask == 0)  # type: ignore
             qk = qk.masked_fill(mask, float("-inf"))  # type: ignore
             attn = F.softmax(qk, dim=-1, dtype=torch.float32).type_as(qk)
             attn = self.attn_dropout(attn)
@@ -113,8 +120,7 @@ class MultiHeadAttention(torch.nn.Module):
         q = self.split_heads(q, B, T, D)
         k = self.split_heads(k, B, T, D)
         v = self.split_heads(v, B, T, D)
-
-        y = self.qkv_attention(q, k, v, T, attention_mask)
+        y = self.qkv_attention(q, k, v, attention_mask)
         # Flatten heads.
         y = y.transpose(1, 2).contiguous().view(B, T, D)
         y = self.out_proj(y)
