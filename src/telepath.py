@@ -187,10 +187,8 @@ class NeuralEncoder(nn.Module):
             stride=(1, 2),
             padding=(0, 1),
         )
-        self.register_buffer(
-            "embed_positions",
-            sinusoids(block_size, d_model).t()[None, :, None, :].detach(),
-        )
+        self.embed_positions = nn.Embedding(block_size, d_model)
+        self.embed_positions.weight = nn.Parameter(sinusoids(block_size, d_model))
         self.embed_electrodes = nn.Embedding(n_channels, d_model)
 
         self.blocks = nn.ModuleList(
@@ -209,8 +207,8 @@ class NeuralEncoder(nn.Module):
 
         x = F.gelu(self.conv1(x))
         x = F.gelu(self.conv2(x))
-        x = (x + self.embed_positions).to(x.dtype)
-        x = x + self.embed_electrodes.weight.t()[None, :, :, None]
+        x = (x + self.embed_positions.weight.t()[:, None, :]).to(x.dtype)
+        x = x + self.embed_electrodes.weight.t()[None, ..., None]
         # Stack the electrode embeddings across the time dimension.
         x = x.reshape(B, N_C * (T // 2), self.d_model)
         for block in self.blocks:
@@ -370,7 +368,7 @@ class Telepath(nn.Module):
             input_ids: Input token ids of shape (batch_size, n_tokens).
         """
         enc = self.encoder(eeg)
-        return self.decoder(input_ids, xc=enc, attention_mask=attention_mask), enc
+        return enc, self.decoder(input_ids, xc=enc, attention_mask=attention_mask)
 
     def step(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor, Tensor]:
         (
@@ -463,9 +461,6 @@ class Telepath(nn.Module):
         new_keys = list(nw.state_dict().keys())
         nw_sd = nw.state_dict()
         for key, param in ptw.state_dict().items():
-            if key == "encoder.embed_positions.weight":
-                # We generate this ourselves with the sinuisoids function.
-                continue
             new_key = map_params(key)
             assert new_key in new_keys, f"{new_key}"
             # We are moving from a 1D conv to a 2D conv, but we want the conv to be the same for each eletrode.
@@ -476,6 +471,9 @@ class Telepath(nn.Module):
 
             if key == "decoder.embed_positions.weight":
                 param = param[: config.decoder_block_size, :]
+
+            if key == "encoder.embed_positions.weight":
+                param = param[: config.encoder_block_size, :]
 
             nw_sd[new_key] = param
         nw.load_state_dict(nw_sd)
