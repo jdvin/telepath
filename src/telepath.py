@@ -80,7 +80,7 @@ class TelepathConfig:
             if isinstance(value, Tensor):
                 assert value.numel() > 0, f"{key} is empty"
             else:
-                assert value != 0, f"{key} is 0"
+                assert key == "dropout" or value != 0, f"{key} is 0"
                 assert value is not None, f"{key} is None"
 
 
@@ -110,7 +110,6 @@ class ResidualAttentionBlock(nn.Module):
             n_heads=n_heads,
             d_model=d_model,
             scale=(d_model // n_heads) ** -0.25,
-            k_bias=True,
             block_size=block_size,
             dropout=dropout,
         )

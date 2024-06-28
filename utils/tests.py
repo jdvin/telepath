@@ -6,6 +6,7 @@ from torch.nn import functional as F
 
 from src.telepath import TelepathConfig, Telepath, TextDecoder
 
+torch.random.manual_seed(42)
 
 # def test_transform():
 # raise NotImplementedError()
@@ -54,6 +55,7 @@ config = TelepathConfig(
     fft_hop_length=1,
     encoder_block_size=1500,
     decoder_block_size=10,
+    dropout=0.0,
 )
 
 model = Telepath.from_pretrained(config)
@@ -85,11 +87,14 @@ def test_positional_embeddings():
 def test_attention():
     global activations
     activations = activations.squeeze(2).transpose(-2, -1)
-    ref_attn = ref_model.get_encoder().layers[0].self_attn(activations)
-    activations = model.encoder.blocks[0].attn(activations)
+    ref_attn = ref_model.get_encoder().layers[0].self_attn
+    attn = model.encoder.blocks[0].attn
+    attn.scale = (attn.d_model // attn.n_heads) ** -0.5
+    ref_attn_output = ref_attn(activations.detach())
+    activations = model.encoder.blocks[0].attn(activations.detach())
     assert torch.allclose(
-        activations, ref_attn[0], rtol=1e-3
-    ), f"rtol={torch.max(torch.abs(activations - ref_attn[0])/torch.abs(ref_attn[0]))}"
+        activations, ref_attn_output[0], rtol=1e-3
+    ), f"rtol={torch.max(torch.abs(activations - ref_attn_output[0])/torch.abs(ref_attn_output[0]))}"
 
 
 # def test_mlp():

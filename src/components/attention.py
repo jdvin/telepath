@@ -13,7 +13,7 @@ class MultiHeadAttention(torch.nn.Module):
         d_model: int,
         block_size: int,
         q_bias: bool = True,
-        k_bias: bool = True,
+        k_bias: bool = False,
         v_bias: bool = True,
         out_bias: bool = True,
         scale: float = 0.0,
@@ -83,7 +83,7 @@ class MultiHeadAttention(torch.nn.Module):
             mask = torch.bitwise_or(self.bias[:, :, :T_q, :T_kv] == 0, attention_mask == 0)  # type: ignore
             qk = qk.masked_fill(mask, float("-inf"))  # type: ignore
             attn = F.softmax(qk, dim=-1, dtype=torch.float32).type_as(qk)
-            attn = self.attn_dropout(attn)
+            attn = self.attn_dropout(attn) if self.training else attn
             # (B, nhead, T, T) x (B, nhead, T, D_head) -> (B, nhead, T, D_head).
             y = attn @ v
         return y
@@ -124,4 +124,4 @@ class MultiHeadAttention(torch.nn.Module):
         # Flatten heads.
         y = y.transpose(1, 2).contiguous().view(B, T, D)
         y = self.out_proj(y)
-        return self.resid_dropout(y)
+        return self.resid_dropout(y) if self.training else y

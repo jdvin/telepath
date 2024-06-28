@@ -233,7 +233,7 @@ def run_eval(
     config: TrainingConfig,
 ):
     """Run evaluation on the validation sets."""
-
+    model.eval()
     val_pbar = tqdm(
         total=len(val_dataloader),
         desc=f"Running validation.",
@@ -270,3 +270,4 @@ def run_eval(
     losses = torch.tensor(losses)
     metrics["val_loss"].update(losses.mean().item())
     metrics["val_loss"].log("val_loss")
+    model.train()
