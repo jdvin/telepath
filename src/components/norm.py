@@ -1,4 +1,5 @@
 import torch
+from torch import Tensor
 from torch import nn
 
 
@@ -11,7 +12,7 @@ class Shift(nn.Module):
 
 
 class Scale(nn.Module):
-    def __init__(self, eps=1e-6):
+    def __init__(self, eps=1e-5):
         super().__init__()
         self.eps = eps
 
@@ -33,23 +34,29 @@ class Affine(nn.Module):
         return self.weight * x + self.bias
 
 
-class LayerNorm(nn.Module):
-    """Layernorm with composability."""
+class LayerNorm(nn.LayerNorm):
+    def forward(self, x: Tensor) -> Tensor:
+        return super().forward(x.float()).type(x.dtype)
 
-    def __init__(
-        self, size: int, shift=True, scale=True, eps=1e-5, affine=True, bias=True
-    ):
-        super().__init__()
-        graph = []
-        if shift:
-            graph.append(Shift())
-        if scale:
-            graph.append(Scale(eps))
-        if affine:
-            graph.append(Affine(size, bias))
 
-        self.graph = nn.Sequential(*graph)
+# class LayerNorm(nn.Module):
+#     """Layernorm with composability."""
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Taken from formula at https://pytorch.org/docs/stable/generated/torch.nn.LayerNorm.html."""
-        return self.graph.forward(x.float()).type(x.dtype)
+#     def __init__(
+#         self, size: int, shift=True, scale=True, eps=1e-5, affine=True, bias=True
+#     ):
+#         super().__init__()
+#         graph = []
+#         if shift:
+#             graph.append(Shift())
+#         if scale:
+#             graph.append(Scale(eps))
+#         if affine:
+#             graph.append(Affine(size, bias))
+
+#         self.graph = nn.Sequential(*graph)
+
+#     def forward(self, x: torch.Tensor) -> torch.Tensor:
+#         """Taken from formula at https://pytorch.org/docs/stable/generated/torch.nn.LayerNorm.html."""
+#         breakpoint()
+#         return self.graph.forward(x.float()).type(x.dtype)

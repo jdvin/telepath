@@ -8,46 +8,10 @@ from src.telepath import TelepathConfig, Telepath, TextDecoder
 
 torch.random.manual_seed(42)
 
-# def test_transform():
-# raise NotImplementedError()
-# tokenizer = AutoTokenizer.from_pretrained("gpt2")
-# tokenizer.pad_token = tokenizer.eos_token
-# transform = get_transform(
-#     tokenizer=tokenizer,
-#     max_length=5,
-#     num_channels=2,
-#     num_samples=3,
-#     start_token_id=50257,
-#     stop_token_id=50256,
-#     pad_token_id=50256,
-# )
-
-# batch = {
-#     "object": ["dog", "cat", "fish"],
-#     "eeg": [[1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 6]],
-# }
-# # import pdb
-
-# # pdb.set_trace()
-# transformed_batch: dict[str, torch.Tensor] = transform(batch)
-# # The transformation should take a batch of cancatenated channel signals over time and batch of nested sample from all channels per time step.
-# assert torch.equal(
-#     transformed_batch["eeg"],
-#     torch.tensor(
-#         [
-#             [[1, 4], [2, 5], [3, 6]],
-#             [[1, 4], [2, 5], [3, 6]],
-#             [[1, 4], [2, 5], [3, 6]],
-#         ]
-#     ),
-# )
-# assert isinstance(transformed_batch["input_ids"], torch.Tensor)
-# assert transformed_batch["input_ids"].shape == (3, 5)
-# assert transformed_batch["input_ids"][:, 0].eq(50257).all().item()
-# assert transformed_batch["input_ids"][:, -1].eq(50256).all().item()
-
-
 activatons = None
+resid = None
+ref_activations = None
+ref_resid = None
 
 config = TelepathConfig(
     pretrained_whisper="openai/whisper-tiny",
@@ -56,55 +20,140 @@ config = TelepathConfig(
     encoder_block_size=1500,
     decoder_block_size=10,
     dropout=0.0,
+    scale_exponent=-0.5,
 )
 
 model = Telepath.from_pretrained(config)
 ref_model = WhisperForConditionalGeneration.from_pretrained(config.pretrained_whisper)
 
 
+def get_rtol(a, b):
+    return torch.abs(a - b) / torch.abs(b)
+
+
 def test_encoder_conv1():
     global activations
-    inputs = torch.rand(3, 80, 1, 1500)
+    global ref_activations
+    inputs = torch.rand(3, 80, 1, 3000)
     activations = model.encoder.conv1(inputs)
     ref_activations = ref_model.get_encoder().conv1(inputs.squeeze(2))
     assert torch.allclose(activations.squeeze(2), ref_activations, rtol=1e-3)
+    print(
+        "post conv1 rtol:", torch.max(get_rtol(activations.squeeze(2), ref_activations))
+    )
 
 
 def test_encoder_conv2():
     global activations
-    ref_activations = ref_model.get_encoder().conv2(activations.squeeze(2))
+    global ref_activations
+    ref_activations = ref_model.get_encoder().conv2(ref_activations)
     activations = model.encoder.conv2(activations)
     assert torch.allclose(activations.squeeze(2), ref_activations, rtol=1e-3)
+    print(
+        "post conv2 rtol:", torch.max(get_rtol(activations.squeeze(2), ref_activations))
+    )
 
 
 def test_positional_embeddings():
     global activations
-    hf_posemb = ref_model.get_encoder().embed_positions.weight
-    assert torch.equal(hf_posemb, model.encoder.embed_positions.weight)
-    activations += hf_posemb.t()[:, None, :750]
+    global ref_activations
+    ref_activations = ref_activations.permute(0, 2, 1)
+    activations = activations.permute(0, 3, 2, 1)
+    activations = activations + model.encoder.embed_positions.weight[None, :, None, :]
+    ref_activations = ref_activations + ref_model.get_encoder().embed_positions.weight
+    activations = activations.reshape(-1, 1500, 384)
+    assert torch.equal(activations, ref_activations)
+    print("post pos emb rtol:", torch.max(get_rtol(activations, ref_activations)))
+
+
+def test_attn_layer_norm():
+    global activations
+    global ref_activations
+    global resid
+    global ref_resid
+    resid = activations.detach()
+    ref_resid = ref_activations.detach()
+    ref_activations = (
+        ref_model.get_encoder().layers[0].self_attn_layer_norm(ref_activations)
+    )
+    activations = model.encoder.blocks[0].attn_ln(activations)
+    assert torch.allclose(activations, ref_activations, rtol=1e-3)
+    print("post attn lnorm rtol:", torch.max(get_rtol(activations, ref_activations)))
 
 
 def test_attention():
     global activations
-    activations = activations.squeeze(2).transpose(-2, -1)
-    ref_attn = ref_model.get_encoder().layers[0].self_attn
-    attn = model.encoder.blocks[0].attn
-    attn.scale = (attn.d_model // attn.n_heads) ** -0.5
-    ref_attn_output = ref_attn(activations.detach())
-    activations = model.encoder.blocks[0].attn(activations.detach())
+    global ref_activations
+    ref_activations = ref_model.get_encoder().layers[0].self_attn(ref_activations)[0]
+    activations = model.encoder.blocks[0].attn(activations)
     assert torch.allclose(
-        activations, ref_attn_output[0], rtol=1e-3
-    ), f"rtol={torch.max(torch.abs(activations - ref_attn_output[0])/torch.abs(ref_attn_output[0]))}"
+        activations, ref_activations[0], rtol=1e-3
+    ), f"rtol={torch.max(get_rtol(activations, ref_activations[0]))}"
+    print("post attn rtol:", torch.max(get_rtol(activations, ref_activations[0])))
 
 
-# def test_mlp():
-#     global activations
-#     cus_mlp = custom_gpt.transformer.blocks[0].mlp
-#     hf_mlp = hf_gpt.transformer.h[0].mlp
+def test_attn_residual():
+    global activations
+    global ref_activations
+    global resid
+    global ref_resid
+    ref_activations = ref_resid + ref_activations
+    activations = resid + activations
+    resid = activations.clone()
+    ref_resid = ref_activations.clone()
+    assert torch.allclose(activations, ref_activations, rtol=1e-3)
+    print("post residual rtol:", torch.max(get_rtol(activations, ref_activations)))
 
-#     cus_opt = cus_mlp(activations)
-#     hf_opt = hf_mlp(activations)
-#     assert torch.allclose(cus_opt, hf_opt, atol=1e-2)
+
+def test_mlp_layer_norm():
+    global activations
+    global ref_activations
+    ref_activations = (
+        ref_model.get_encoder().layers[0].final_layer_norm(ref_activations)
+    )
+    activations = model.encoder.blocks[0].mlp_ln(activations)
+    assert torch.allclose(activations, ref_activations, rtol=1e-3)
+    print("post mlp lnorm rtol:", torch.max(get_rtol(activations, ref_activations)))
+
+
+def test_mlp():
+    global activations
+    global ref_activations
+    mlp = model.encoder.blocks[0].mlp
+    ref_activations = ref_model.get_encoder().layers[0].fc1(ref_activations)
+    ref_activations = ref_model.get_encoder().layers[0].activation_fn(ref_activations)
+    ref_activations = ref_model.get_encoder().layers[0].fc2(ref_activations)
+    activations = mlp(activations)
+    assert torch.allclose(activations, ref_activations, rtol=1e-3)
+    print("post mlp rtol:", torch.max(get_rtol(activations, ref_activations)))
+
+
+def test_mlp_residual():
+    global activations
+    global ref_activations
+    global resid
+    global ref_resid
+    ref_activations = ref_resid + ref_activations
+    activations = resid + activations
+    resid = activations.clone()
+    ref_resid = ref_activations.clone()
+    assert torch.allclose(activations, ref_activations, rtol=1e-3)
+    print("post mlp residual rtol:", torch.max(get_rtol(activations, ref_activations)))
+
+
+def test_encoder_block():
+    global activations
+    layer_head_mask = torch.ones(model.encoder.blocks[0].attn.n_heads)
+    attention_mask = torch.ones(3, 1, 750, 750)
+    ref_activations = ref_model.get_encoder().layers[0](
+        activations,
+        attention_mask,
+        layer_head_mask,
+    )
+    activations = model.encoder.blocks[0](activations)
+    assert torch.allclose(
+        activations, ref_activations[0], rtol=1e-3
+    ), f"rtol={get_rtol(activations, ref_activations[0])}"
 
 
 # iteration = 0
@@ -119,7 +168,6 @@ def test_attention():
 #     dec = Telepath.from_pretrained(config).decoder
 #     stop_token_id = 50256
 #     max_length = 10
-
 #     def dummy_forward(input_ids, embeddings, inference) -> torch.Tensor:
 #         global iteration
 #         # Each output is the value of the embedding for the given input unless `embedding_value == iteration`, then we append the stop token to end the sequence.
@@ -164,6 +212,8 @@ def test_attention():
 #             [0, 3, 3, 3, stop_token_id],
 #         ]
 
+# def test_encoder_forward():
+
 
 def test_telepath():
     config = TelepathConfig(
@@ -201,8 +251,8 @@ def test_telepath_from_pretrained():
     assert output[0].shape == ref_output.encoder_last_hidden_state.shape
     assert torch.allclose(
         output[0], ref_output.encoder_last_hidden_state, rtol=1e-3
-    ), f"rtol={torch.max(torch.abs(output[0] - ref_output.encoder_last_hidden_state)/torch.abs(ref_output.encoder_last_hidden_state))}"
+    ), f"hidden states rtol={torch.max(torch.abs(output[0] - ref_output.encoder_last_hidden_state)/torch.abs(ref_output.encoder_last_hidden_state))}"
     assert output[1].shape == ref_output.logits.shape
     assert torch.allclose(
         output[1], ref_output.logits, rtol=1e-3
-    ), f"rtol={torch.max(torch.abs(output[1] - ref_output.logits)/torch.abs(ref_output.logits))}"
+    ), f"logits rtol={torch.max(torch.abs(output[1] - ref_output.logits)/torch.abs(ref_output.logits))}"

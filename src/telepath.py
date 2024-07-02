@@ -32,6 +32,7 @@ class TelepathConfig:
     encoder_n_layers: int = 0
     decoder_n_layers: int = 0
     dropout: float = 0.1
+    scale_exponent: float = -0.25
 
     @classmethod
     def from_yaml(cls, path: str):
@@ -104,12 +105,13 @@ class ResidualAttentionBlock(nn.Module):
         n_heads: int,
         cross_attn: bool = False,
         dropout: float = 0.0,
+        scale_exponent: float = -0.25,
     ):
         super().__init__()
         self.attn = MultiHeadAttention(
             n_heads=n_heads,
             d_model=d_model,
-            scale=(d_model // n_heads) ** -0.25,
+            scale=(d_model // n_heads) ** scale_exponent,
             block_size=block_size,
             dropout=dropout,
         )
@@ -119,7 +121,7 @@ class ResidualAttentionBlock(nn.Module):
             MultiHeadAttention(
                 n_heads,
                 d_model,
-                scale=(d_model // n_heads) ** -0.25,
+                scale=(d_model // n_heads) ** scale_exponent,
                 k_bias=True,
                 block_size=block_size,
                 dropout=dropout,
@@ -168,6 +170,7 @@ class NeuralEncoder(nn.Module):
         n_heads: int,
         dropout: float,
         n_layers: int,
+        scale_exponent: float,
     ):
         super().__init__()
 
@@ -191,7 +194,13 @@ class NeuralEncoder(nn.Module):
         self.embed_electrodes = nn.Embedding(n_channels, d_model)
 
         self.blocks = nn.ModuleList(
-            ResidualAttentionBlock(block_size, d_model, n_heads, dropout=dropout)
+            ResidualAttentionBlock(
+                block_size,
+                d_model,
+                n_heads,
+                dropout=dropout,
+                scale_exponent=scale_exponent,
+            )
             for _ in range(n_layers)
         )
         self.ln_post = LayerNorm(d_model)
@@ -203,11 +212,13 @@ class NeuralEncoder(nn.Module):
         # The inputs to a convolution 2d are of the shape (N, C_in, H, W).
         B, N_C, N_F, T = x.size()
         x = x.reshape(B, N_F, N_C, T)
-
         x = F.gelu(self.conv1(x))
         x = F.gelu(self.conv2(x))
-        x = (x + self.embed_positions.weight.t()[:, None, :]).to(x.dtype)
-        x = x + self.embed_electrodes.weight.t()[None, ..., None]
+        # (batch_size, d_model, n_eeg_channels, sequence_length)
+        # -> (batch_size, sequence_length, n_eeg_channels, d_model).
+        x = x.permute(0, 3, 2, 1)
+        x = (x + self.embed_positions.weight[None, :, None, :]).to(x.dtype)
+        x = (x + self.embed_electrodes.weight[None, None, ...]).to(x.dtype)
         # Stack the electrode embeddings across the time dimension.
         x = x.reshape(B, N_C * (T // 2), self.d_model)
         for block in self.blocks:
@@ -338,6 +349,7 @@ class Telepath(nn.Module):
             n_heads=config.n_heads,
             n_layers=config.encoder_n_layers,
             dropout=config.dropout,
+            scale_exponent=config.scale_exponent,
         )
 
         self.decoder = TextDecoder(
@@ -445,13 +457,13 @@ class Telepath(nn.Module):
         param_map = {
             "layers": "blocks",
             "self_attn": "attn",
-            "self_attn_layer_norm": "attn_ln.graph.2",
+            "self_attn_layer_norm": "attn_ln",  # .graph.2",
             "fc1": "mlp.0",
             "fc2": "mlp.2",
-            "final_layer_norm": "mlp_ln.graph.2",
-            "layer_norm": "ln_post.graph.2",
+            "final_layer_norm": "mlp_ln",  # .graph.2",
+            "layer_norm": "ln_post",  # .graph.2",
             "encoder_attn": "cross_attn",
-            "encoder_attn_layer_norm": "cross_attn_ln.graph.2",
+            "encoder_attn_layer_norm": "cross_attn_ln",  # .graph.2",
         }
         map_params = lambda pn: ".".join(
             [param_map.get(seg, seg) for seg in pn.split(".")]
