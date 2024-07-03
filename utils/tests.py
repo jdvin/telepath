@@ -3,8 +3,11 @@ import random
 from transformers import AutoTokenizer, WhisperForConditionalGeneration
 import torch
 from torch.nn import functional as F
+from matplotlib import pyplot as plt
 
 from src.telepath import TelepathConfig, Telepath, TextDecoder
+
+torch.set_grad_enabled(False)
 
 torch.random.manual_seed(42)
 
@@ -86,8 +89,13 @@ def test_attention():
     global ref_activations
     ref_activations = ref_model.get_encoder().layers[0].self_attn(ref_activations)[0]
     activations = model.encoder.blocks[0].attn(activations)
+    print(ref_activations.shape)
+    print(activations.shape)
+    for i, (batch, ref_batch) in enumerate(zip(activations, ref_activations)):
+        plt.imsave(f"batch{i}.png", get_rtol(batch, ref_batch))
+        assert torch.allclose(batch, ref_batch, rtol=1e-3)
     assert torch.allclose(
-        activations, ref_activations[0], rtol=1e-3
+        activations, ref_activations, rtol=1e-3
     ), f"rtol={torch.max(get_rtol(activations, ref_activations[0]))}"
     print("post attn rtol:", torch.max(get_rtol(activations, ref_activations[0])))
 
@@ -144,16 +152,19 @@ def test_mlp_residual():
 def test_encoder_block():
     global activations
     layer_head_mask = torch.ones(model.encoder.blocks[0].attn.n_heads)
-    attention_mask = torch.ones(3, 1, 750, 750)
+    attention_mask = torch.ones(3, 1, 1500, 1500)
     ref_activations = ref_model.get_encoder().layers[0](
         activations,
         attention_mask,
         layer_head_mask,
     )
     activations = model.encoder.blocks[0](activations)
+    for i, (batch, ref_batch) in enumerate(zip(activations, ref_activations[0])):
+        plt.imsave(f"enc_batch{i}.png", get_rtol(batch, ref_batch))
+        # assert torch.allclose(batch, ref_batch, rtol=1e-3)
     assert torch.allclose(
-        activations, ref_activations[0], rtol=1e-3
-    ), f"rtol={get_rtol(activations, ref_activations[0])}"
+        activations, ref_activations, rtol=1e-3
+    ), f"rtol={get_rtol(activations, ref_activations)}"
 
 
 # iteration = 0
