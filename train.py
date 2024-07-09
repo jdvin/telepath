@@ -208,16 +208,17 @@ def main(
             if world_size == 1 or metrics["microstep"].value % grad_accum_steps != 0
             else model.no_sync()
         )
-        with ddp_context:
-            with scaler_context:
-                _, _, loss = model.module.step(micro_batch)
-                loss = loss / grad_accum_steps
-            metrics["train_loss"].update(loss.item())
-            # Get the next batch straight away without blocking whilst we compute the backward pass,
-            # unless we are at the end of the epoch.
-            if metrics["epochmicrostep"].value < len(train_dataloader) - 1:
-                micro_batch = get_microbatch(train_dataloader_iterator, rank)
-            scaler.scale(loss).backward()  # type: ignore
+        with torch.autograd.set_detect_anomaly(True):
+            with ddp_context:
+                with scaler_context:
+                    _, _, loss = model.module.step(micro_batch)
+                    loss = loss / grad_accum_steps
+                metrics["train_loss"].update(loss.item())
+                # Get the next batch straight away without blocking whilst we compute the backward pass,
+                # unless we are at the end of the epoch.
+                if metrics["epochmicrostep"].value < len(train_dataloader) - 1:
+                    micro_batch = get_microbatch(train_dataloader_iterator, rank)
+                scaler.scale(loss).backward()  # type: ignore
 
         # If we are still accumulating gradients then skip gradient application and logging.
         if metrics["microstep"].value % grad_accum_steps != 0:
@@ -231,7 +232,6 @@ def main(
             metrics["train_gradnorm"].update(
                 nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             )
-
         # Gradient application and logging.
         scaler.step(optim)
         scaler.update()

@@ -274,16 +274,50 @@ class TextDecoder(nn.Module):
         inference: bool = False,
     ) -> Tensor:
         offset = kv_cache[next(iter(kv_cache.values()))].size(0) if kv_cache else 0
+        print(
+            "pre embed version:",
+            x._version,
+            xc._version if xc is not None else None,
+            attention_mask._version if attention_mask is not None else None,
+        )
         x = (
             self.embed_tokens(x)
-            + self.embed_positions.weight[offset : offset + x.size(1)]
+            + self.embed_positions.weight.clone()[offset : offset + x.shape[-1]]
+        )
+        print(
+            "post embed version:",
+            x._version,
+            xc._version if xc is not None else None,
+            attention_mask._version if attention_mask is not None else None,
         )
         for block in self.blocks:
             x = block(x, xc, attention_mask=attention_mask, kv_cache=kv_cache)
+        print(
+            "blocks version:",
+            x._version,
+            xc._version if xc is not None else None,
+            attention_mask._version if attention_mask is not None else None,
+        )
         x = self.ln_post(x)
+        print(
+            "post ln version:",
+            x._version,
+            xc._version if xc is not None else None,
+            attention_mask._version if attention_mask is not None else None,
+        )
+
         if inference:
             x = x[:, -1, :]
-        return x @ self.embed_tokens.weight.t()
+        logits = (
+            x @ torch.transpose(self.embed_tokens.weight.to(x.dtype), 0, 1)
+        ).float()
+        print(
+            "unembed version:",
+            x._version,
+            xc._version if xc is not None else None,
+            attention_mask._version if attention_mask is not None else None,
+        )
+        return logits
 
     @torch.no_grad()
     def generate(
@@ -389,14 +423,14 @@ class Telepath(nn.Module):
         ) = (batch["input_features"], batch["input_ids"], batch["attention_mask"])
 
         # Remove the last token from the logits, as we don't need to predict the padding token.
-        logits, enc = self.forward(
+        enc, logits = self.forward(
             eeg, token_ids, attention_mask=decoder_attention_mask
         )
         logits = logits[:, :-1, :].contiguous()
         # Flatten logits tensor (B x T-1 x V) to 2D tensor ((B T-1) x V) for loss calculation.
         logits = logits.view(-1, logits.size(-1))
         # Shift and flatten labels (B x T) to 1D tensor (B T-1).
-        labels = token_ids[:, 1:].contiguous().view(-1)
+        labels = token_ids[:, 1:].clone().contiguous().view(-1)
         # Mask special tokens.
         labels[labels >= self.config.decoder_special_tokens_start] = -100
         loss = F.cross_entropy(logits, labels, ignore_index=-100)
@@ -486,6 +520,6 @@ class Telepath(nn.Module):
             if key == "encoder.embed_positions.weight":
                 param = param[: config.encoder_block_size, :]
 
-            nw_sd[new_key] = param
+            nw_sd[new_key] = param.clone()
         nw.load_state_dict(nw_sd)
         return nw

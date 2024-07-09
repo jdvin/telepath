@@ -314,6 +314,7 @@ def get_collate_fn(
             dim=1,
         )
         assert isinstance(eeg_features, list)
+
         return {
             "input_features": torch.stack(eeg_features),
             "input_ids": input_ids,

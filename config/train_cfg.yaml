@@ -1,11 +1,11 @@
 dtype: fp32
-dataset_path: data/things_eeg_100ms
+dataset_path: data/
 subjects:
   - 1
-things_metadata_path: data/things_eeg_100ms/things_concepts.csv
+things_metadata_path: data/things_concepts.csv
 num_epochs: 1
 batch_size: 8
-micro_batch_size: 2
+micro_batch_size: 1
 validation_interval: 0.1
 log_interval: 1
 max_lr: 0.00001

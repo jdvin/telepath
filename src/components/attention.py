@@ -1,5 +1,3 @@
-import math
-
 import torch
 from torch import Tensor
 from torch import nn
@@ -60,7 +58,7 @@ class MultiHeadAttention(torch.nn.Module):
         T_kv: int = k.size(2)
         B = q.size(0)
         if attention_mask is None:
-            attention_mask = torch.ones(B, self.n_heads, T_q, T_kv)
+            attention_mask = torch.ones(B, self.n_heads, T_q, T_kv, device=q.device)
         else:
             attention_mask = attention_mask[:, None, :, None].expand(
                 B, self.n_heads, T_q, T_kv
@@ -95,7 +93,8 @@ class MultiHeadAttention(torch.nn.Module):
         kv_cache: dict[int, Tensor] | None = None,
         attention_mask: Tensor | None = None,
     ) -> tuple[Tensor]:
-        B, T, D = x.size()  # Batch size, sequence length, model dimension.
+        B, T_q, D = x.size()  # Batch size, sequence length, model dimension.
+        T_kv = xc.size(1) if xc is not None else T_q
         # Instantiate a 'dummy' kv cache to make the logic simpler.
         if kv_cache is None:
             kv_cache = {}
@@ -103,25 +102,24 @@ class MultiHeadAttention(torch.nn.Module):
         k = kv_cache.get(hash(self.k_proj), None)
         v = kv_cache.get(hash(self.v_proj), None)
         T_cached = k.size(1) if k is not None else 0
-        T_q = T - T_cached
-        if k is None or k.size(1) != T:
-            k_new = self.k_proj((x if xc is None else xc)[:, :T_q, :])
-            v_new = self.v_proj((x if xc is None else xc)[:, :T_q, :])
-            kv_cache[self.k_proj] = torch.concat(
-                [k if k is not None else torch.tensor([]), k_new], dim=1
+        if k is None or k.size(1) != T_kv:
+            k_new = self.k_proj((x if xc is None else xc)[:, T_cached:, :])
+            v_new = self.v_proj((x if xc is None else xc)[:, T_cached:, :])
+            kv_cache[self.k_proj] = (
+                k_new if k is None else torch.concat([k, k_new], dim=1)
             )
-            kv_cache[self.v_proj] = torch.concat(
-                [v if v is not None else torch.tensor([]), v_new], dim=1
+            kv_cache[self.v_proj] = (
+                v_new if v is None else torch.concat([v, v_new], dim=1)
             )
 
-        q = self.q_proj(x[:, :T_q, :])
+        q = self.q_proj(x)
         k = kv_cache[self.k_proj]
         v = kv_cache[self.v_proj]
-        q = self.split_heads(q, B, T, D)
-        k = self.split_heads(k, B, T, D)
-        v = self.split_heads(v, B, T, D)
+        q = self.split_heads(q, B, T_q, D)
+        k = self.split_heads(k, B, T_kv, D)
+        v = self.split_heads(v, B, T_kv, D)
         y = self.qkv_attention(q, k, v, attention_mask)
         # Flatten heads.
-        y = y.transpose(1, 2).contiguous().view(B, T, D)
+        y = y.transpose(1, 2).contiguous().view(B, T_q, D)
         y = self.out_proj(y)
         return self.resid_dropout(y) if self.training else y
