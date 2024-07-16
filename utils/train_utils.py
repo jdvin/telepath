@@ -230,15 +230,15 @@ def run_eval(
     val_sampler: Sampler | None,
     metrics: dict[str, Metric],
     device: str | int,
-    config: TrainingConfig,
 ):
     """Run evaluation on the validation sets."""
+    print(device)
     model.eval()
     val_pbar = tqdm(
         total=len(val_dataloader),
         desc=f"Running validation.",
         leave=False,
-        disable=device not in {0, "cuda:0"},
+        disable=device not in {0, "cuda:0", "cuda"},
     )
     val_dataloader_iterator = get_dataloader_iterator(
         val_dataloader, val_sampler, metrics["epoch"].value
@@ -247,7 +247,6 @@ def run_eval(
     # More memory efficient to accumulate as we go, but if we perform the calculation at the end,
     # then it is more mathematically correct and we can more easily calculate metrics across all labels in the val set.
     losses = []
-
     generations = defaultdict(list)
     for _ in range(len(val_dataloader)):
         micro_batch = get_microbatch(val_dataloader_iterator, device)

@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from torch import nn, Tensor, tensor
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint_sequential
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 import yaml
@@ -33,6 +34,7 @@ class TelepathConfig:
     decoder_n_layers: int = 0
     dropout: float = 0.1
     scale_exponent: float = -0.25
+    train_decoder: bool = False
 
     @classmethod
     def from_yaml(cls, path: str):
@@ -74,15 +76,6 @@ class TelepathConfig:
             self.decoder_special_tokens_start = min(
                 tokenizer.added_tokens_decoder.keys()
             )
-
-        for key, value in self.__dict__.items():
-            if key == "pretrained_whisper":
-                continue
-            if isinstance(value, Tensor):
-                assert value.numel() > 0, f"{key} is empty"
-            else:
-                assert key == "dropout" or value != 0, f"{key} is 0"
-                assert value is not None, f"{key} is None"
 
 
 def sinusoids(length: int, channels: int, max_timescale: int = 1000):
@@ -146,16 +139,22 @@ class ResidualAttentionBlock(nn.Module):
         attention_mask: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
     ) -> Tensor:
+        if torch.any(torch.isnan(x)):
+            raise ValueError("NaN in input before cross attn.")
         x = x + self.attn(
             x=self.attn_ln(x), attention_mask=attention_mask, kv_cache=kv_cache
         )
         if self.cross_attn and self.cross_attn_ln:
+            if torch.any(torch.isnan(x)):
+                raise ValueError("NaN in input before cross attn.")
             x = x + self.cross_attn(
                 self.cross_attn_ln(x),
                 xc,
                 attention_mask=attention_mask,
                 kv_cache=kv_cache,
             )
+            if torch.any(torch.isnan(x)):
+                raise ValueError("NaN in input after cross attn.")
         x = x + self.mlp(self.mlp_ln(x))
         return x
 
@@ -171,6 +170,7 @@ class NeuralEncoder(nn.Module):
         dropout: float,
         n_layers: int,
         scale_exponent: float,
+        checkpoint_activations: bool = True,
     ):
         super().__init__()
 
@@ -205,6 +205,7 @@ class NeuralEncoder(nn.Module):
         )
         self.ln_post = LayerNorm(d_model)
         self.d_model = d_model
+        self.checkpoint_activations = checkpoint_activations
 
     def forward(self, x: Tensor) -> Tensor:
         # (batch_size, n_ee_channels, n_freqs, sequence_length) -> (batch_size, n_freqs, n_eeg_channels, sequence_length).
@@ -213,16 +214,28 @@ class NeuralEncoder(nn.Module):
         B, N_C, N_F, T = x.size()
         x = x.reshape(B, N_F, N_C, T)
         x = F.gelu(self.conv1(x))
+        if torch.any(torch.isnan(x)):
+            raise ValueError("NaN in input after conv1.")
         x = F.gelu(self.conv2(x))
         # (batch_size, d_model, n_eeg_channels, sequence_length)
         # -> (batch_size, sequence_length, n_eeg_channels, d_model).
         x = x.permute(0, 3, 2, 1)
         x = (x + self.embed_positions.weight[None, :, None, :]).to(x.dtype)
         x = (x + self.embed_electrodes.weight[None, None, ...]).to(x.dtype)
+        if torch.any(torch.isnan(x)):
+            raise ValueError("NaN in input after embedding.")
+
         # Stack the electrode embeddings across the time dimension.
         x = x.reshape(B, N_C * (T // 2), self.d_model)
-        for block in self.blocks:
-            x = block(x=x)
+        if self.checkpoint_activations:
+            x = checkpoint_sequential(
+                self.blocks, len(self.blocks), x, use_reentrant=False
+            )
+        else:
+            for block in self.blocks:
+                x = block(x=x)
+        if torch.any(torch.isnan(x)):
+            raise ValueError("NaN in input after blocks.")
         return x
 
     def optim_groups(self, weight_decay: float = 1e-1) -> list[dict[str, str]]:
@@ -251,19 +264,29 @@ class NeuralEncoder(nn.Module):
 
 class TextDecoder(nn.Module):
     def __init__(
-        self, n_vocab: int, n_ctx: int, d_model: int, n_head: int, n_layer: int
+        self,
+        n_vocab: int,
+        n_ctx: int,
+        d_model: int,
+        n_head: int,
+        n_layer: int,
+        checkpoint_activations: bool = False,
+        scale_exponent: float = -0.25,
     ):
         super().__init__()
         self.embed_tokens = nn.Embedding(n_vocab, d_model)
         self.embed_positions = nn.Embedding(n_ctx, d_model)
         self.blocks = nn.ModuleList(
-            ResidualAttentionBlock(n_ctx, d_model, n_head, cross_attn=True)
+            ResidualAttentionBlock(
+                n_ctx, d_model, n_head, cross_attn=True, scale_exponent=scale_exponent
+            )
             for _ in range(n_layer)
         )
         assert isinstance(self.blocks[0], ResidualAttentionBlock)
         assert isinstance(self.blocks[0].attn, MultiHeadAttention)
         assert isinstance(self.blocks[0].attn.k_proj, nn.Linear)
         self.ln_post = LayerNorm(d_model)
+        self.checkpoint_activations = checkpoint_activations
 
     def forward(
         self,
@@ -274,49 +297,28 @@ class TextDecoder(nn.Module):
         inference: bool = False,
     ) -> Tensor:
         offset = kv_cache[next(iter(kv_cache.values()))].size(0) if kv_cache else 0
-        print(
-            "pre embed version:",
-            x._version,
-            xc._version if xc is not None else None,
-            attention_mask._version if attention_mask is not None else None,
-        )
         x = (
             self.embed_tokens(x)
             + self.embed_positions.weight.clone()[offset : offset + x.shape[-1]]
         )
-        print(
-            "post embed version:",
-            x._version,
-            xc._version if xc is not None else None,
-            attention_mask._version if attention_mask is not None else None,
-        )
-        for block in self.blocks:
-            x = block(x, xc, attention_mask=attention_mask, kv_cache=kv_cache)
-        print(
-            "blocks version:",
-            x._version,
-            xc._version if xc is not None else None,
-            attention_mask._version if attention_mask is not None else None,
-        )
+        if torch.any(torch.isnan(x)):
+            raise ValueError("NaN in input after dec embedding.")
+        if self.checkpoint_activations:
+            x = checkpoint_sequential(
+                self.blocks, len(self.blocks), x, use_reentrant=False
+            )
+        else:
+            for block in self.blocks:
+                x = block(x, xc, attention_mask=attention_mask, kv_cache=kv_cache)
+        if torch.any(torch.isnan(x)):
+            raise ValueError("NaN in input after dec blocks.")
         x = self.ln_post(x)
-        print(
-            "post ln version:",
-            x._version,
-            xc._version if xc is not None else None,
-            attention_mask._version if attention_mask is not None else None,
-        )
-
         if inference:
             x = x[:, -1, :]
-        logits = (
-            x @ torch.transpose(self.embed_tokens.weight.to(x.dtype), 0, 1)
-        ).float()
-        print(
-            "unembed version:",
-            x._version,
-            xc._version if xc is not None else None,
-            attention_mask._version if attention_mask is not None else None,
-        )
+        logits = x @ torch.transpose(self.embed_tokens.weight.to(x.dtype), 0, 1)
+        if torch.any(torch.isnan(x)):
+            raise ValueError("NaN in input after dec unembed.")
+
         return logits
 
     @torch.no_grad()
@@ -392,7 +394,12 @@ class Telepath(nn.Module):
             d_model=config.d_model,
             n_head=config.n_heads,
             n_layer=config.decoder_n_layers,
+            scale_exponent=config.scale_exponent,
         )
+
+        if not config.train_decoder:
+            for param in self.decoder.parameters():
+                param.requires_grad = False
 
         self.start_sequence = config.decoder_start_sequence
         self.stop_token = config.decoder_stop_token
@@ -413,6 +420,8 @@ class Telepath(nn.Module):
             input_ids: Input token ids of shape (batch_size, n_tokens).
         """
         enc = self.encoder(eeg)
+        if torch.any(torch.isnan(enc)):
+            raise ValueError("NaN in enc.")
         return enc, self.decoder(input_ids, xc=enc, attention_mask=attention_mask)
 
     def step(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor, Tensor]:
@@ -426,6 +435,8 @@ class Telepath(nn.Module):
         enc, logits = self.forward(
             eeg, token_ids, attention_mask=decoder_attention_mask
         )
+        if torch.any(torch.isnan(logits)):
+            raise ValueError("NaN in input after forward.")
         logits = logits[:, :-1, :].contiguous()
         # Flatten logits tensor (B x T-1 x V) to 2D tensor ((B T-1) x V) for loss calculation.
         logits = logits.view(-1, logits.size(-1))
@@ -434,6 +445,8 @@ class Telepath(nn.Module):
         # Mask special tokens.
         labels[labels >= self.config.decoder_special_tokens_start] = -100
         loss = F.cross_entropy(logits, labels, ignore_index=-100)
+        if torch.any(torch.isnan(logits)):
+            raise ValueError("NaN in input after loss.")
         return enc, logits, loss
 
     def configure_optimizers(
@@ -446,7 +459,7 @@ class Telepath(nn.Module):
         )
         warmup_batches = int(num_batches * warmup_frac)
         warmup_scheduler = LinearLR(
-            optimizer, start_factor=0.01, end_factor=1, total_iters=warmup_batches
+            optimizer, start_factor=1e-7, end_factor=1, total_iters=warmup_batches
         )
         decay_scheduler = CosineAnnealingLR(optimizer, T_max=num_batches)
         scheduler = SequentialLR(

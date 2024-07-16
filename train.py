@@ -10,6 +10,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.multiprocessing as torch_mp
 from torch.amp.autocast_mode import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
+from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm import tqdm
 import wandb
 from utils.data_utils import extract_things_100ms_ds, get_collate_fn, get_dataset_dict
@@ -93,7 +94,13 @@ def main(
     # Create model.
     model_config = TelepathConfig(**load_yaml(model_config_path))
     model: Telepath = Telepath(model_config)
-    model.to(rank)
+
+    torch_dtype = {
+        "fp32": torch.float32,
+        "fp16": torch.float16,
+        "bf16": torch.bfloat16,
+    }[cfg.dtype]
+    model.to(rank, dtype=torch_dtype)
     assert isinstance(model, Telepath)
     assert not isinstance(model.module.configure_optimizers, torch.Tensor)
     assert isinstance(model.module, nn.Module)
@@ -138,11 +145,6 @@ def main(
         cfg.validation_interval, steps_per_epoch
     )
 
-    torch_dtype = {
-        "fp32": torch.float32,
-        "fp16": torch.float16,
-        "bf16": torch.bfloat16,
-    }[cfg.dtype]
     device_type = "cuda" if "cuda" in device else "cpu"
     scaler_context = (
         nullcontext()
@@ -188,7 +190,7 @@ def main(
         total=steps_per_epoch,
         desc=f"Epoch {metrics['epoch'].value}/{cfg.num_epochs}.",
         leave=False,
-        disable=rank != 0,
+        disable=rank not in {0, "cuda:0", "cuda"},
     )
     if eval_first:
         run_eval(
@@ -208,18 +210,20 @@ def main(
             if world_size == 1 or metrics["microstep"].value % grad_accum_steps != 0
             else model.no_sync()
         )
-        with torch.autograd.set_detect_anomaly(True):
-            with ddp_context:
-                with scaler_context:
-                    _, _, loss = model.module.step(micro_batch)
-                    loss = loss / grad_accum_steps
-                metrics["train_loss"].update(loss.item())
-                # Get the next batch straight away without blocking whilst we compute the backward pass,
-                # unless we are at the end of the epoch.
-                if metrics["epochmicrostep"].value < len(train_dataloader) - 1:
-                    micro_batch = get_microbatch(train_dataloader_iterator, rank)
-                scaler.scale(loss).backward()  # type: ignore
+        # torch.cuda.memory._record_memory_history()
+        with ddp_context:
+            with scaler_context:
+                _, _, loss = model.module.step(micro_batch)
+                loss = loss / grad_accum_steps
+            metrics["train_loss"].update(loss.item())
+            # Get the next batch straight away without blocking whilst we compute the backward pass,
+            # unless we are at the end of the epoch.
+            if metrics["epochmicrostep"].value < len(train_dataloader) - 1:
+                micro_batch = get_microbatch(train_dataloader_iterator, rank)
+            scaler.scale(loss).backward()  # type: ignore
 
+        # torch.cuda.memory._dump_snapshot("my_snapshot_checkpointed.pickle")
+        # break
         # If we are still accumulating gradients then skip gradient application and logging.
         if metrics["microstep"].value % grad_accum_steps != 0:
             metrics["microstep"].update(1)
@@ -265,7 +269,7 @@ def main(
                 total=steps_per_epoch,
                 desc=f"Epoch: {metrics['epoch'].value}/{cfg.num_epochs}.",
                 leave=False,
-                disable=rank != 0,
+                disable=rank not in {0, "cuda:0", "cuda"},
             )
             train_dataloader_iterator = get_dataloader_iterator(
                 train_dataloader, train_sampler, metrics["epoch"].value

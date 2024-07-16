@@ -90,7 +90,7 @@ ELECTRODE_ORDER = np.array(
 SESSIONS_PER_SUBJECT = 4
 
 
-SESSION_EPOCHS = {"train": 16800, "test": 4080}
+SESSION_EPOCHS = {"train": 16710, "test": 4080}
 
 
 class ThingsDataset(Dataset):
@@ -227,7 +227,12 @@ def extract_things_100ms_ds(
                 data = np.vstack((stims, data))
                 # Get the index of each stimulus onset.
                 epoch_indexes = data[0, :].nonzero()[0]
-                for epoch_i, epoch_loc in enumerate(epoch_indexes):
+                epoch_i = 0
+                for epoch_loc in epoch_indexes:
+                    target_obj = data[0, epoch_loc]
+                    if target_obj == 99999.0:
+                        continue
+                    # breakpoint()
                     # Get the absolute index of the current epoch.
                     n = (
                         sub_i * SESSIONS_PER_SUBJECT * SESSION_EPOCHS[split_type]
@@ -239,13 +244,13 @@ def extract_things_100ms_ds(
                     ds[split_type][n, :, :] = data[
                         :, epoch_loc + epoch_start : epoch_loc + epoch_end
                     ]
-                    target_obj = ds[split_type][n, 0, target_obj_onset_idx].item()
                     # Label the stimulus channel at the start of the epoch.
                     ds[split_type][n, 0, :] = np.full(
                         shape=epoch_length,
                         fill_value=target_obj,
                     )
                     pbar.update(1)
+                    epoch_i += 1
 
     assert all([isinstance(value, np.memmap) for value in ds.values()])
     return ds
@@ -253,9 +258,8 @@ def extract_things_100ms_ds(
 
 def get_spectrogram(signal: torch.Tensor, n_fft: int, hop_length: int):
     window = torch.hann_window(n_fft)
-    stft = torch.stft(
-        signal - signal.mean(), n_fft, hop_length, window=window, return_complex=True
-    )
+    signal = (signal - signal.mean()) / torch.sqrt(signal.var() + 1e-7)
+    stft = torch.stft(signal, n_fft, hop_length, window=window, return_complex=True)
     # Freq 0 is not needed because the signal is normalized.
     return stft[:, 1:, :-1].abs() ** 2
 

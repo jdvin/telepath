@@ -63,6 +63,8 @@ class MultiHeadAttention(torch.nn.Module):
             attention_mask = attention_mask[:, None, :, None].expand(
                 B, self.n_heads, T_q, T_kv
             )
+        if torch.any(torch.isnan(attention_mask.bool())):
+            raise ValueError("NaNs in attention_mask.")
         if self.flash:
             y = F.scaled_dot_product_attention(
                 q,
@@ -73,6 +75,8 @@ class MultiHeadAttention(torch.nn.Module):
                 is_causal=self.is_causal,
                 scale=self.scale,
             )
+            if torch.any(torch.isnan(y)):
+                raise ValueError(f"NaNs in y post torch attn., {self.scale}")
 
         else:
             # (B, nhead, T_q, D_head) x (B, nhead, D_head, T_kv) -> (B, nhead, T_q, T_kv).
@@ -104,7 +108,11 @@ class MultiHeadAttention(torch.nn.Module):
         T_cached = k.size(1) if k is not None else 0
         if k is None or k.size(1) != T_kv:
             k_new = self.k_proj((x if xc is None else xc)[:, T_cached:, :])
+            if torch.any(torch.isnan(k_new)):
+                raise ValueError("NaNs in k_new.")
             v_new = self.v_proj((x if xc is None else xc)[:, T_cached:, :])
+            if torch.any(torch.isnan(v_new)):
+                raise ValueError("NaNs in v_new.")
             kv_cache[self.k_proj] = (
                 k_new if k is None else torch.concat([k, k_new], dim=1)
             )
@@ -113,13 +121,28 @@ class MultiHeadAttention(torch.nn.Module):
             )
 
         q = self.q_proj(x)
+        if torch.any(torch.isnan(q)):
+            raise ValueError("NaNs in q.")
         k = kv_cache[self.k_proj]
         v = kv_cache[self.v_proj]
         q = self.split_heads(q, B, T_q, D)
         k = self.split_heads(k, B, T_kv, D)
         v = self.split_heads(v, B, T_kv, D)
+        if torch.any(torch.isnan(q)):
+            raise ValueError("NaNs in q pre attn.")
+        if torch.any(torch.isnan(k)):
+            raise ValueError("NaNs in k pre attn.")
+        if torch.any(torch.isnan(v)):
+            raise ValueError("NaNs in v pre attn.")
+
         y = self.qkv_attention(q, k, v, attention_mask)
+        if torch.any(torch.isnan(y)):
+            raise ValueError("NaNs in y post attn.")
         # Flatten heads.
         y = y.transpose(1, 2).contiguous().view(B, T_q, D)
+        if torch.any(torch.isnan(y)):
+            raise ValueError("NaNs in y post flatten.")
         y = self.out_proj(y)
+        if torch.any(torch.isnan(y)):
+            raise ValueError("NaNs in y post flatten.")
         return self.resid_dropout(y) if self.training else y
