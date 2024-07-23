@@ -304,12 +304,7 @@ def get_collate_fn(
             return_tensors="pt",
         )
         input_ids = tokenizer_out["input_ids"]
-        attention_mask = tokenizer_out["attention_mask"]
         start_sequences = torch.tile(start_token_id_sequence, (batch_size, 1))
-        assert isinstance(attention_mask, Tensor)
-        decoder_attention_mask = torch.cat(
-            (torch.ones_like(start_sequences), attention_mask), dim=1
-        )
         input_ids = torch.cat(
             (
                 start_sequences,
@@ -322,7 +317,6 @@ def get_collate_fn(
         return {
             "input_features": torch.stack(eeg_features),
             "input_ids": input_ids,
-            "attention_mask": decoder_attention_mask,
         }
 
     return collate_fn

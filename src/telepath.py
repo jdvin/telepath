@@ -46,7 +46,7 @@ class TelepathConfig:
         """There is definitely a better way."""
         if self.pretrained_whisper:
             pt_whisper_config = WhisperConfig.from_pretrained(self.pretrained_whisper)
-            # Please translate from the neural code to english please.
+            # Translate from the neural code to english, please.
             tokenizer = WhisperTokenizer.from_pretrained(
                 self.pretrained_whisper, task="translate", language="english"
             )
@@ -139,22 +139,16 @@ class ResidualAttentionBlock(nn.Module):
         attention_mask: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
     ) -> Tensor:
-        if torch.any(torch.isnan(x)):
-            raise ValueError("NaN in input before cross attn.")
         x = x + self.attn(
             x=self.attn_ln(x), attention_mask=attention_mask, kv_cache=kv_cache
         )
         if self.cross_attn and self.cross_attn_ln:
-            if torch.any(torch.isnan(x)):
-                raise ValueError("NaN in input before cross attn.")
             x = x + self.cross_attn(
                 self.cross_attn_ln(x),
                 xc,
                 attention_mask=attention_mask,
                 kv_cache=kv_cache,
             )
-            if torch.any(torch.isnan(x)):
-                raise ValueError("NaN in input after cross attn.")
         x = x + self.mlp(self.mlp_ln(x))
         return x
 
@@ -214,17 +208,12 @@ class NeuralEncoder(nn.Module):
         B, N_C, N_F, T = x.size()
         x = x.reshape(B, N_F, N_C, T)
         x = F.gelu(self.conv1(x))
-        if torch.any(torch.isnan(x)):
-            raise ValueError("NaN in input after conv1.")
         x = F.gelu(self.conv2(x))
         # (batch_size, d_model, n_eeg_channels, sequence_length)
         # -> (batch_size, sequence_length, n_eeg_channels, d_model).
         x = x.permute(0, 3, 2, 1)
         x = (x + self.embed_positions.weight[None, :, None, :]).to(x.dtype)
         x = (x + self.embed_electrodes.weight[None, None, ...]).to(x.dtype)
-        if torch.any(torch.isnan(x)):
-            raise ValueError("NaN in input after embedding.")
-
         # Stack the electrode embeddings across the time dimension.
         x = x.reshape(B, N_C * (T // 2), self.d_model)
         if self.checkpoint_activations:
@@ -234,8 +223,6 @@ class NeuralEncoder(nn.Module):
         else:
             for block in self.blocks:
                 x = block(x=x)
-        if torch.any(torch.isnan(x)):
-            raise ValueError("NaN in input after blocks.")
         return x
 
     def optim_groups(self, weight_decay: float = 1e-1) -> list[dict[str, str]]:
@@ -301,8 +288,6 @@ class TextDecoder(nn.Module):
             self.embed_tokens(x)
             + self.embed_positions.weight.clone()[offset : offset + x.shape[-1]]
         )
-        if torch.any(torch.isnan(x)):
-            raise ValueError("NaN in input after dec embedding.")
         if self.checkpoint_activations:
             x = checkpoint_sequential(
                 self.blocks, len(self.blocks), x, use_reentrant=False
@@ -310,14 +295,10 @@ class TextDecoder(nn.Module):
         else:
             for block in self.blocks:
                 x = block(x, xc, attention_mask=attention_mask, kv_cache=kv_cache)
-        if torch.any(torch.isnan(x)):
-            raise ValueError("NaN in input after dec blocks.")
         x = self.ln_post(x)
         if inference:
             x = x[:, -1, :]
         logits = x @ torch.transpose(self.embed_tokens.weight.to(x.dtype), 0, 1)
-        if torch.any(torch.isnan(x)):
-            raise ValueError("NaN in input after dec unembed.")
 
         return logits
 
@@ -420,23 +401,15 @@ class Telepath(nn.Module):
             input_ids: Input token ids of shape (batch_size, n_tokens).
         """
         enc = self.encoder(eeg)
-        if torch.any(torch.isnan(enc)):
-            raise ValueError("NaN in enc.")
         return enc, self.decoder(input_ids, xc=enc, attention_mask=attention_mask)
 
     def step(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor, Tensor]:
         (
             eeg,
             token_ids,
-            decoder_attention_mask,
-        ) = (batch["input_features"], batch["input_ids"], batch["attention_mask"])
-
+        ) = (batch["input_features"], batch["input_ids"])
         # Remove the last token from the logits, as we don't need to predict the padding token.
-        enc, logits = self.forward(
-            eeg, token_ids, attention_mask=decoder_attention_mask
-        )
-        if torch.any(torch.isnan(logits)):
-            raise ValueError("NaN in input after forward.")
+        enc, logits = self.forward(eeg, token_ids)
         logits = logits[:, :-1, :].contiguous()
         # Flatten logits tensor (B x T-1 x V) to 2D tensor ((B T-1) x V) for loss calculation.
         logits = logits.view(-1, logits.size(-1))
@@ -445,8 +418,6 @@ class Telepath(nn.Module):
         # Mask special tokens.
         labels[labels >= self.config.decoder_special_tokens_start] = -100
         loss = F.cross_entropy(logits, labels, ignore_index=-100)
-        if torch.any(torch.isnan(logits)):
-            raise ValueError("NaN in input after loss.")
         return enc, logits, loss
 
     def configure_optimizers(
