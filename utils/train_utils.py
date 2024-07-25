@@ -232,7 +232,6 @@ def run_eval(
     device: str | int,
 ):
     """Run evaluation on the validation sets."""
-    print(device)
     model.eval()
     val_pbar = tqdm(
         total=len(val_dataloader),

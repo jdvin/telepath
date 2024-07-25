@@ -11,7 +11,6 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 import yaml
 
 from .components.attention import MultiHeadAttention
-from .components.norm import LayerNorm
 
 from transformers import WhisperModel, WhisperConfig, WhisperTokenizer
 
@@ -108,7 +107,7 @@ class ResidualAttentionBlock(nn.Module):
             block_size=block_size,
             dropout=dropout,
         )
-        self.attn_ln = LayerNorm(d_model)
+        self.attn_ln = nn.LayerNorm(d_model)
 
         self.cross_attn = (
             MultiHeadAttention(
@@ -122,7 +121,7 @@ class ResidualAttentionBlock(nn.Module):
             if cross_attn
             else None
         )
-        self.cross_attn_ln = LayerNorm(d_model) if cross_attn else None
+        self.cross_attn_ln = nn.LayerNorm(d_model) if cross_attn else None
 
         d_mlp = 4 * d_model
         self.mlp = nn.Sequential(
@@ -130,7 +129,7 @@ class ResidualAttentionBlock(nn.Module):
             nn.GELU(),
             nn.Linear(d_mlp, d_model),
         )
-        self.mlp_ln = LayerNorm(d_model)
+        self.mlp_ln = nn.LayerNorm(d_model)
 
     def forward(
         self,
@@ -197,7 +196,7 @@ class NeuralEncoder(nn.Module):
             )
             for _ in range(n_layers)
         )
-        self.ln_post = LayerNorm(d_model)
+        self.ln_post = nn.LayerNorm(d_model)
         self.d_model = d_model
         self.checkpoint_activations = checkpoint_activations
 
@@ -272,7 +271,7 @@ class TextDecoder(nn.Module):
         assert isinstance(self.blocks[0], ResidualAttentionBlock)
         assert isinstance(self.blocks[0].attn, MultiHeadAttention)
         assert isinstance(self.blocks[0].attn.k_proj, nn.Linear)
-        self.ln_post = LayerNorm(d_model)
+        self.ln_post = nn.LayerNorm(d_model)
         self.checkpoint_activations = checkpoint_activations
 
     def forward(
@@ -283,7 +282,7 @@ class TextDecoder(nn.Module):
         kv_cache: dict[int, Tensor] | None = None,
         inference: bool = False,
     ) -> Tensor:
-        offset = kv_cache[next(iter(kv_cache.values()))].size(0) if kv_cache else 0
+        offset = kv_cache[next(iter(kv_cache.keys()))].size(0) if kv_cache else 0
         x = (
             self.embed_tokens(x)
             + self.embed_positions.weight.clone()[offset : offset + x.shape[-1]]
@@ -327,7 +326,9 @@ class TextDecoder(nn.Module):
         generating_batch_indexes = list(range(batch_size))
         for _ in range(max_length):
             logits = self.forward(input_ids, embed, inference=True, kv_cache=kv_cache)
-            input_ids = torch.cat([input_ids, logits.argmax(dim=-1)], dim=1)
+            input_ids = torch.cat(
+                [input_ids, logits.argmax(dim=-1).unsqueeze(0).t()], dim=1
+            )
             # Get the index of every generation that has generated the stop token.
             stop_indexes = (
                 (input_ids[:, -1] == stop_token).nonzero(as_tuple=True)[0].tolist()
@@ -392,7 +393,7 @@ class Telepath(nn.Module):
         )
 
     def forward(
-        self, eeg: Tensor, input_ids: Tensor, attention_mask: Tensor | None
+        self, eeg: Tensor, input_ids: Tensor, attention_mask: Tensor | None = None
     ) -> tuple[Tensor, Tensor]:
         """Forward pass through the Telepath model.
 
@@ -408,6 +409,7 @@ class Telepath(nn.Module):
             eeg,
             token_ids,
         ) = (batch["input_features"], batch["input_ids"])
+        eeg = eeg.to(dtype=torch.bfloat16)
         # Remove the last token from the logits, as we don't need to predict the padding token.
         enc, logits = self.forward(eeg, token_ids)
         logits = logits[:, :-1, :].contiguous()

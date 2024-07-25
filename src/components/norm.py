@@ -34,11 +34,6 @@ class Affine(nn.Module):
         return self.weight * x + self.bias
 
 
-class LayerNorm(nn.LayerNorm):
-    def forward(self, x: Tensor) -> Tensor:
-        return super().forward(x.float()).type(x.dtype)
-
-
 # class LayerNorm(nn.Module):
 #     """Layernorm with composability."""
 
