@@ -264,6 +264,10 @@ def run_eval(
         losses.append(loss)
 
         val_pbar.update()
+    metrics["val_generations"].update(generations)
+    metrics["val_generations"].log(f"val_generation-step{metrics['step'].value}")
+    metrics["val_accuracy"].update(generations)
+    metrics["val_accuracy"].log("val_accuracy")
 
     losses = torch.tensor(losses)
     metrics["val_loss"].update(losses.mean().item())

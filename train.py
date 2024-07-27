@@ -199,7 +199,6 @@ def main(
             val_sampler=val_sampler,
             metrics=metrics,
             device=rank,
-            config=cfg,
         )
 
     while True:
@@ -249,7 +248,6 @@ def main(
                 val_sampler=val_sampler,
                 metrics=metrics,
                 device=rank,
-                config=cfg,
             )
 
         if metrics["step"].value % cfg.log_interval == 0:

@@ -133,7 +133,11 @@ def flatten_ranks(root: list[dict[str, list[Any]]]) -> dict[str, list[Any]]:
 def get_accuracy(generations: list[dict[str, list[str]]]) -> float:
     """Slightly less naiive accuracy calculation."""
     accuracy = 0
-    flattened_generations = flatten_ranks(generations)
+
+    if isinstance(generations, list):
+        flattened_generations = flatten_ranks(generations)
+    else:
+        flattened_generations = generations
     for target_text, pred_text in zip(
         flattened_generations["targets"], flattened_generations["predictions"]
     ):
@@ -149,13 +153,18 @@ def get_accuracy(generations: list[dict[str, list[str]]]) -> float:
     return accuracy
 
 
-def construct_table(generations: list[dict[str, list[str]]]) -> dict:
+def construct_table(
+    generations: dict[str, list[str]] | list[dict[str, list[str]]]
+) -> dict:
     """Construct a wandb table for logging generations.
 
     Generations from each rank are nested in batches."""
     out = wandb.Table(columns=["Target", "Prediction"])
-    column_data = flatten_ranks(generations)
-    for target, prediction in zip(column_data["target"], column_data["prediction"]):
+    if isinstance(generations, list):
+        column_data = flatten_ranks(generations)
+    else:
+        column_data = generations
+    for target, prediction in zip(column_data["targets"], column_data["predictions"]):
         out.add_data(target, prediction)
     return out
 
