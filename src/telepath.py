@@ -282,11 +282,9 @@ class TextDecoder(nn.Module):
         kv_cache: dict[int, Tensor] | None = None,
         inference: bool = False,
     ) -> Tensor:
-        offset = kv_cache[next(iter(kv_cache.keys()))].size(0) if kv_cache else 0
-        x = (
-            self.embed_tokens(x)
-            + self.embed_positions.weight.clone()[offset : offset + x.shape[-1]]
-        )
+        offset = kv_cache[next(iter(kv_cache.keys()))].size(1) if kv_cache else 0
+        x = self.embed_tokens(x)
+        x = x + self.embed_positions.weight[: x.shape[1]]
         if self.checkpoint_activations:
             x = checkpoint_sequential(
                 self.blocks, len(self.blocks), x, use_reentrant=False
