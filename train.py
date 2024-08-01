@@ -13,7 +13,7 @@ from torch.cuda.amp.grad_scaler import GradScaler
 from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm import tqdm
 import wandb
-from utils.data_utils import extract_things_100ms_ds, get_collate_fn, get_dataset_dict
+from utils.data_utils import extract_things_100ms_ds, get_collate_fn
 
 from utils.train_utils import (
     run_eval,
@@ -47,6 +47,7 @@ parser.add_argument("--model-config-path", type=str, default=None)
 parser.add_argument("--world-size", type=int, default=1)
 parser.add_argument("--checkpoints", action="store_true", default=False)
 parser.add_argument("--reset-data-cache", action="store_true", default=False)
+parser.add_argument("--is-test-run", action="store_true", default=False)
 
 
 def main(
@@ -61,6 +62,7 @@ def main(
     device: str,
     checkpoints: bool,
     reset_data_cache: bool,
+    is_test_run: bool,
 ):
     cfg = TrainingConfig(
         **load_yaml(training_config_path),
@@ -74,7 +76,7 @@ def main(
         device=device,
         checkpoints=checkpoints,
     )
-    grad_accum_steps = cfg.batch_size // (cfg.micro_batch_size * cfg.world_size)
+    grad_accum_steps = cfg.batch_size // (cfg.train_micro_batch_size * cfg.world_size)
     model_config = TelepathConfig(**load_yaml(model_config_path))
 
     setup(
@@ -116,6 +118,7 @@ def main(
             root_dir=cfg.dataset_path,
             subjects=cfg.subjects,
             reset_cache=reset_data_cache,
+            is_test_run=is_test_run,
         )
     if world_size > 1:
         dist.barrier()
@@ -138,7 +141,14 @@ def main(
         train_sampler,
         val_dataloader,
         val_sampler,
-    ) = get_dataloaders(ds, cfg.micro_batch_size, rank, world_size, collate_fn)
+    ) = get_dataloaders(
+        ds,
+        cfg.train_micro_batch_size,
+        cfg.val_micro_batch_size,
+        rank,
+        world_size,
+        collate_fn,
+    )
     # Steps per epoch is the number of batches in the training set.
     steps_per_epoch = math.ceil(len(train_dataloader) / grad_accum_steps)
     validation_step_indexes = get_validation_step_indexes(

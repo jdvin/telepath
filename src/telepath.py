@@ -33,7 +33,7 @@ class TelepathConfig:
     decoder_n_layers: int = 0
     dropout: float = 0.1
     scale_exponent: float = -0.25
-    train_decoder: bool = False
+    train_decoder: bool = True
 
     @classmethod
     def from_yaml(cls, path: str):
@@ -163,24 +163,27 @@ class NeuralEncoder(nn.Module):
         dropout: float,
         n_layers: int,
         scale_exponent: float,
-        checkpoint_activations: bool = True,
+        checkpoint_activations: bool = False,
     ):
         super().__init__()
 
         # We want the convolutions to be performed separately on each eletrode channel.
         # The channels will be stacked across the height dimension.
-        self.conv1 = nn.Conv2d(
-            in_channels=n_freqs,
-            out_channels=d_model,
-            kernel_size=(1, 3),
-            padding=(0, 1),
+        self.conv1 = nn.Conv1d(
+            in_channels=n_freqs * n_channels,
+            out_channels=d_model * n_channels,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            groups=n_channels,
         )
-        self.conv2 = nn.Conv2d(
-            in_channels=d_model,
-            out_channels=d_model,
-            kernel_size=(1, 3),
-            stride=(1, 2),
-            padding=(0, 1),
+        self.conv2 = nn.Conv1d(
+            in_channels=d_model * n_channels,
+            out_channels=d_model * n_channels,
+            kernel_size=3,
+            stride=2,
+            padding=1,
+            groups=n_channels,
         )
         self.embed_positions = nn.Embedding(block_size, d_model)
         self.embed_positions.weight = nn.Parameter(sinusoids(block_size, d_model))
@@ -205,12 +208,12 @@ class NeuralEncoder(nn.Module):
         # We want the convolutions to be performed separately on each eletrode channel.
         # The inputs to a convolution 2d are of the shape (N, C_in, H, W).
         B, N_C, N_F, T = x.size()
-        x = x.reshape(B, N_F, N_C, T)
+        x = x.reshape(B, N_C * N_F, T)
         x = F.gelu(self.conv1(x))
         x = F.gelu(self.conv2(x))
-        # (batch_size, d_model, n_eeg_channels, sequence_length)
+        x = x.reshape(B, N_C, self.d_model, T // 2)
         # -> (batch_size, sequence_length, n_eeg_channels, d_model).
-        x = x.permute(0, 3, 2, 1)
+        x = x.permute(0, 3, 1, 2)
         x = (x + self.embed_positions.weight[None, :, None, :]).to(x.dtype)
         x = (x + self.embed_electrodes.weight[None, None, ...]).to(x.dtype)
         # Stack the electrode embeddings across the time dimension.
@@ -470,6 +473,7 @@ class Telepath(nn.Module):
 
     @classmethod
     def from_pretrained(cls, config: TelepathConfig):
+        """Initialize the model from pretrained Whisper."""
         ptw = WhisperModel.from_pretrained(config.pretrained_whisper)
         assert isinstance(ptw, WhisperModel)
         param_map = {
@@ -490,13 +494,16 @@ class Telepath(nn.Module):
         new_keys = list(nw.state_dict().keys())
         nw_sd = nw.state_dict()
         for key, param in ptw.state_dict().items():
+            param: Tensor
             new_key = map_params(key)
             assert new_key in new_keys, f"{new_key}"
-            # We are moving from a 1D conv to a 2D conv, but we want the conv to be the same for each eletrode.
-            # NOTE: Do we want to have unique params for each electrode?
-            # Could then initialize from the same weights but have them learn different filters.
             if "conv" in key and "weight" in key:
-                param = param.unsqueeze(-2)
+                # Reshape the Whisper 1D conv weights to our 2D grouped conv weights
+                out_channels, in_channels, kernel_size = param.shape
+                param = param.unsqueeze(1).repeat(1, config.n_eeg_channels, 1, 1)
+                param = param.reshape(
+                    out_channels * config.n_eeg_channels, in_channels, kernel_size
+                )
 
             if key == "decoder.embed_positions.weight":
                 param = param[: config.decoder_block_size, :]

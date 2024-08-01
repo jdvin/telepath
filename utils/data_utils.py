@@ -93,43 +93,25 @@ SESSIONS_PER_SUBJECT = 4
 SESSION_EPOCHS = {"train": 16710, "test": 4080}
 
 
-class ThingsDataset(Dataset):
-    def __init__(self, ds: np.memmap, things_metadata_path: str):
-        self.ds = ds
-        self.things_metadata = pd.read_csv(things_metadata_path)
-
-    def __len__(self):
-        return self.ds.shape[0]
-
-    def __getitem__(self, idx):
-        return {
-            # Slice out the stimulus channels.
-            "eeg": self.ds[idx, 1:, :],
-            # Get the object id from the stimulus channel.
-            "object": self.things_metadata["Word"][self.ds[idx, 0, 0].to(int)],
-        }
-
-
-def get_dataset_dict(
-    root_dir: str, ds_key: str, things_metadata_path
-) -> dict[str, ThingsDataset]:
-    train_data = np.load(f"{root_dir}/{ds_key}_train.npy", allow_pickle=True)
-    test_data = np.load(f"{root_dir}/{ds_key}_test.npy", allow_pickle=True)
-    return {
-        "train": ThingsDataset(train_data, things_metadata_path),
-        "test": ThingsDataset(test_data, things_metadata_path),
-    }
-
-
 def extract_things_100ms_ds(
     root_dir: str,
     subjects: list[int] | range,
     validation_type: ValidationType = ValidationType.DEFAULT,
     epoch_start: int = -200,
     epoch_end: int = 200,
+    is_test_run: bool = False,
     reset_cache: bool = False,
 ) -> dict[str, np.memmap]:
-    """This is going to be a doozy.
+    """
+    Extract the EEG data from the raw files and save it to a memmap file.
+
+    Args:
+        ...
+        is_test_run: If True, construct a testing dataset consisting of only `SESSION_PER_SUBJECT` epochs, for the given subjects. Have the `test` set be the same as the training set.
+                    Useful for debugging.
+        ...
+
+    This is going to be a doozy.
 
     This may look unecessarily verbose, but the goal here is to be able to go straight from the
     the raw files as they were given to a dataset of desired structure.
@@ -139,6 +121,8 @@ def extract_things_100ms_ds(
     use the common indexing scheme of THINGS between the training and test sets to begin with?
     """
     ds_str = "".join([str(sub) for sub in subjects]) + str(epoch_start) + str(epoch_end)
+    if is_test_run:
+        ds_str += "_test"
     epoch_length = epoch_end - epoch_start
     target_obj_onset_idx = -1 * epoch_start
     if validation_type != ValidationType.DEFAULT:
@@ -165,19 +149,22 @@ def extract_things_100ms_ds(
         len(ELECTRODE_ORDER) + 1,  # +1 for the stimulus channel.
         epoch_end - epoch_start,
     )
-
+    train_split_shape = split_shape(SESSION_EPOCHS["train"] if not is_test_run else 1)
+    test_split_shape = (
+        split_shape(SESSION_EPOCHS["test"]) if not is_test_run else train_split_shape
+    )
     ds = {
         "train": np.memmap(
             dtype=np.float32,
             filename=training_file_path,
             mode="r" if cached else "w+",
-            shape=split_shape(SESSION_EPOCHS["train"]),
+            shape=train_split_shape,
         ),
         "test": np.memmap(
             dtype=np.float32,
             filename=test_file_path,
             mode="r" if cached else "w+",
-            shape=split_shape(SESSION_EPOCHS["test"]),
+            shape=test_split_shape,
         ),
     }
     if cached and not reset_cache:
@@ -188,6 +175,7 @@ def extract_things_100ms_ds(
             for split_type in ds.keys()
         ]
     )
+    split_types = ["train", "test"] if not is_test_run else ["train"]
     pbar = tqdm(total=total_rows, desc="Extracting EEG Data.")
     for sub_i, sub in enumerate(subjects):
         for ses_i, ses in enumerate(range(1, SESSIONS_PER_SUBJECT + 1)):
@@ -251,7 +239,10 @@ def extract_things_100ms_ds(
                     )
                     pbar.update(1)
                     epoch_i += 1
-
+                    if is_test_run:
+                        break
+    if is_test_run:
+        ds["test"] = ds["train"]
     assert all([isinstance(value, np.memmap) for value in ds.values()])
     return ds
 

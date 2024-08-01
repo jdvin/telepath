@@ -226,9 +226,9 @@ class Metric:
                 value = value.item()
             wandb.log(
                 {
-                    key.replace("_", "/"): plot.line(**value)
-                    if isinstance(value, dict)
-                    else value
+                    key.replace("_", "/"): (
+                        plot.line(**value) if isinstance(value, dict) else value
+                    )
                 },
                 commit=False,
             )

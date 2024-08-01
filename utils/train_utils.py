@@ -50,7 +50,8 @@ class TrainingConfig:
     things_metadata_path: str
     num_epochs: int
     batch_size: int
-    micro_batch_size: int
+    train_micro_batch_size: int
+    val_micro_batch_size: int
     validation_interval: float
     log_interval: float  # Measured in steps.
     max_lr: float
@@ -59,8 +60,8 @@ class TrainingConfig:
     grad_clip: float
 
     def __post_init__(self):
-        assert self.batch_size % self.micro_batch_size == 0
-        assert self.micro_batch_size * self.world_size <= self.batch_size
+        assert self.batch_size % self.train_micro_batch_size == 0
+        assert self.train_micro_batch_size * self.world_size <= self.batch_size
 
 
 def load_yaml(path: str) -> dict:
@@ -182,7 +183,8 @@ def get_validation_step_indexes(
 
 def get_dataloaders(
     dataset: dict[str, np.memmap],
-    microbatch_size: int,
+    train_microbatch_size: int,
+    val_microbatch_size: int,
     rank: int,
     world_size: int,
     collate_fn: Callable[[list], dict],
@@ -198,14 +200,14 @@ def get_dataloaders(
         train_sampler, val_sampler = None, None
     train_dataloader = DataLoader(
         dataset["train"],  # type: ignore
-        batch_size=microbatch_size,
+        batch_size=train_microbatch_size,
         shuffle=train_sampler is None,
         sampler=train_sampler,
         collate_fn=collate_fn,
     )
     val_dataloader = DataLoader(
         dataset["test"],  # type: ignore
-        batch_size=microbatch_size,
+        batch_size=val_microbatch_size,
         shuffle=val_sampler is None,
         sampler=val_sampler,
         collate_fn=collate_fn,
