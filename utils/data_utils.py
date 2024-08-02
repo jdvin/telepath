@@ -171,7 +171,9 @@ def extract_things_100ms_ds(
         return ds
     total_rows = sum(
         [
-            SESSION_EPOCHS[split_type] * SESSIONS_PER_SUBJECT * len(subjects)
+            (SESSION_EPOCHS[split_type] if not is_test_run else 1)
+            * SESSIONS_PER_SUBJECT
+            * len(subjects)
             for split_type in ds.keys()
         ]
     )
@@ -179,7 +181,7 @@ def extract_things_100ms_ds(
     pbar = tqdm(total=total_rows, desc="Extracting EEG Data.")
     for sub_i, sub in enumerate(subjects):
         for ses_i, ses in enumerate(range(1, SESSIONS_PER_SUBJECT + 1)):
-            for split_type in ["train", "test"]:
+            for split_type in split_types:
                 path = os.path.join(
                     root_dir,
                     f"sub-{'0' if sub < 9 else ''}{sub}",
@@ -242,7 +244,7 @@ def extract_things_100ms_ds(
                     if is_test_run:
                         break
     if is_test_run:
-        ds["test"] = ds["train"]
+        ds["test"] = ds["train"].copy()
     assert all([isinstance(value, np.memmap) for value in ds.values()])
     return ds
 
