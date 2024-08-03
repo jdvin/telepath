@@ -418,8 +418,15 @@ class Telepath(nn.Module):
         logits = logits.view(-1, logits.size(-1))
         # Shift and flatten labels (B x T) to 1D tensor (B T-1).
         labels = token_ids[:, 1:].clone().contiguous().view(-1)
-        # Mask special tokens.
-        labels[labels >= self.config.decoder_special_tokens_start] = -100
+        # Mask special tokens in the loss function, except for the first EOS token.
+        special_tokens_mask = (labels >= self.config.decoder_special_tokens_start).to(
+            torch.int
+        )
+        cumsum = torch.cumsum(special_tokens_mask, dim=0)
+        labels[
+            (cumsum > 1) & (labels >= self.config.decoder_special_tokens_start)
+        ] = -100
+        print(labels)
         loss = F.cross_entropy(logits, labels, ignore_index=-100)
         return enc, logits, loss
 

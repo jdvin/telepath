@@ -179,6 +179,7 @@ def extract_things_100ms_ds(
     )
     split_types = ["train", "test"] if not is_test_run else ["train"]
     pbar = tqdm(total=total_rows, desc="Extracting EEG Data.")
+    n = 0
     for sub_i, sub in enumerate(subjects):
         for ses_i, ses in enumerate(range(1, SESSIONS_PER_SUBJECT + 1)):
             for split_type in split_types:
@@ -222,13 +223,6 @@ def extract_things_100ms_ds(
                     target_obj = data[0, epoch_loc]
                     if target_obj == 99999.0:
                         continue
-                    # breakpoint()
-                    # Get the absolute index of the current epoch.
-                    n = (
-                        sub_i * SESSIONS_PER_SUBJECT * SESSION_EPOCHS[split_type]
-                        + ses_i * SESSION_EPOCHS[split_type]
-                        + epoch_i
-                    )
                     # Slice the current epoch out of the data stream.
                     # rows x ch x time <- ch x time.
                     ds[split_type][n, :, :] = data[
@@ -241,6 +235,7 @@ def extract_things_100ms_ds(
                     )
                     pbar.update(1)
                     epoch_i += 1
+                    n += 1
                     if is_test_run:
                         break
     if is_test_run:
@@ -296,8 +291,13 @@ def get_collate_fn(
             add_special_tokens=False,
             return_tensors="pt",
         )
+        attention_mask = tokenizer_out["attention_mask"]
         input_ids = tokenizer_out["input_ids"]
         start_sequences = torch.tile(start_token_id_sequence, (batch_size, 1))
+        assert isinstance(attention_mask, torch.Tensor)
+        decoder_attention_mask = torch.cat(
+            [torch.ones_like(start_sequences), attention_mask], dim=1
+        )
         input_ids = torch.cat(
             (
                 start_sequences,
@@ -310,6 +310,7 @@ def get_collate_fn(
         return {
             "input_features": torch.stack(eeg_features),
             "input_ids": input_ids,
+            "decoder_attention_mask": decoder_attention_mask,
         }
 
     return collate_fn
