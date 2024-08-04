@@ -222,6 +222,7 @@ def main(
         # torch.cuda.memory._record_memory_history()
         with ddp_context:
             with scaler_context:
+                print("Train step")
                 _, _, loss = model.module.step(micro_batch)
                 loss = loss / grad_accum_steps
             metrics["train_loss"].update(loss.item())

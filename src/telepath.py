@@ -410,23 +410,22 @@ class Telepath(nn.Module):
             eeg,
             token_ids,
         ) = (batch["input_features"], batch["input_ids"])
+        print(token_ids)
         eeg = eeg.to(dtype=torch.bfloat16)
         # Remove the last token from the logits, as we don't need to predict the padding token.
         enc, logits = self.forward(eeg, token_ids)
         logits = logits[:, :-1, :].contiguous()
         # Flatten logits tensor (B x T-1 x V) to 2D tensor ((B T-1) x V) for loss calculation.
         logits = logits.view(-1, logits.size(-1))
+        # Mask all padding tokens except the first which are being used as stop tokens.
+        padding_mask = token_ids == self.config.decoder_stop_token
+        stop_token_indices = (padding_mask == 1).to(torch.long).argmax(dim=1)
+        padding_mask[torch.arange(padding_mask.shape[0]), stop_token_indices] = 0
+        labels = token_ids.clone()
+        labels[padding_mask] = -100
         # Shift and flatten labels (B x T) to 1D tensor (B T-1).
-        labels = token_ids[:, 1:].clone().contiguous().view(-1)
+        labels = labels[:, 1:].contiguous().view(-1)
         # Mask special tokens in the loss function, except for the first EOS token.
-        special_tokens_mask = (labels >= self.config.decoder_special_tokens_start).to(
-            torch.int
-        )
-        cumsum = torch.cumsum(special_tokens_mask, dim=0)
-        labels[
-            (cumsum > 1) & (labels >= self.config.decoder_special_tokens_start)
-        ] = -100
-        print(labels)
         loss = F.cross_entropy(logits, labels, ignore_index=-100)
         return enc, logits, loss
 
