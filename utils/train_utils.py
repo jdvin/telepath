@@ -250,7 +250,6 @@ def run_eval(
     losses = []
     generations = defaultdict(list)
     for _ in range(len(val_dataloader)):
-        print("Eval step")
         micro_batch = get_microbatch(val_dataloader_iterator, device)
 
         enc, _, loss = model.step(micro_batch)

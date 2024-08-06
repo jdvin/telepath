@@ -112,7 +112,7 @@ def row_concat(t1: MetricState, t2: MetricState) -> Tensor:
     return torch.concat([t1, t2], dim=0)
 
 
-def position_in_epoch(inference_artefacts: InferenceArtefacts) -> int:
+def position_in_cycle(inference_artefacts: InferenceArtefacts) -> int:
     """For a given intra-epoch cycle (e.g., step or microstep), given the absolute number of the current cycle (`inference_artefacts[0]`; indexed from 1)
     and the total number of cycles in an epoch (`inference_artefacts[1]`; index from 1), return the number of the current cycle relative to the current epoch.
     """
@@ -278,13 +278,13 @@ METRICS = {
     ),
     MetricKey.EPOCHSTEP: Metric(
         1,
-        transform_fn=position_in_epoch,
+        transform_fn=position_in_cycle,
         accum_fn=replace,
         reset_rule=MetricResetRule.MANUAL,
     ),
     MetricKey.EPOCHMICROSTEP: Metric(
         1,
-        transform_fn=position_in_epoch,
+        transform_fn=position_in_cycle,
         accum_fn=replace,
         reset_rule=MetricResetRule.MANUAL,
     ),

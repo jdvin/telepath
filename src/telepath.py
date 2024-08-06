@@ -410,7 +410,6 @@ class Telepath(nn.Module):
             eeg,
             token_ids,
         ) = (batch["input_features"], batch["input_ids"])
-        print(token_ids)
         eeg = eeg.to(dtype=torch.bfloat16)
         # Remove the last token from the logits, as we don't need to predict the padding token.
         enc, logits = self.forward(eeg, token_ids)

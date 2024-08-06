@@ -222,13 +222,12 @@ def main(
         # torch.cuda.memory._record_memory_history()
         with ddp_context:
             with scaler_context:
-                print("Train step")
                 _, _, loss = model.module.step(micro_batch)
                 loss = loss / grad_accum_steps
             metrics["train_loss"].update(loss.item())
             # Get the next batch straight away without blocking whilst we compute the backward pass,
             # unless we are at the end of the epoch.
-            if metrics["epochmicrostep"].value < len(train_dataloader) - 1:
+            if metrics["epochmicrostep"].value < len(train_dataloader):
                 micro_batch = get_microbatch(train_dataloader_iterator, rank)
             scaler.scale(loss).backward()  # type: ignore
 
@@ -289,10 +288,10 @@ def main(
         if metrics["epoch"].value == cfg.num_epochs + 1:
             logger.info("Training complete.")
             break
-
         metrics["step"].update(1)
-        metrics["epochstep"].update((metrics["step"].value, steps_per_epoch))
         metrics["microstep"].update(1)
+
+        metrics["epochstep"].update((metrics["step"].value, steps_per_epoch))
         metrics["epochmicrostep"].update(
             (metrics["microstep"].value, len(train_dataloader))
         )

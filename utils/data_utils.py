@@ -223,6 +223,12 @@ def extract_things_100ms_ds(
                     target_obj = data[0, epoch_loc]
                     if target_obj == 99999.0:
                         continue
+                    # Get the absolute index of the current epoch.
+                    n = (
+                        sub_i * SESSIONS_PER_SUBJECT * SESSION_EPOCHS[split_type]
+                        + ses_i * SESSION_EPOCHS[split_type]
+                        + epoch_i
+                    )
                     # Slice the current epoch out of the data stream.
                     # rows x ch x time <- ch x time.
                     ds[split_type][n, :, :] = data[
@@ -235,7 +241,6 @@ def extract_things_100ms_ds(
                     )
                     pbar.update(1)
                     epoch_i += 1
-                    n += 1
                     if is_test_run:
                         break
     if is_test_run:

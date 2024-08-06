@@ -6,6 +6,7 @@ from torch.nn import functional as F
 from matplotlib import pyplot as plt
 
 from src.telepath import TelepathConfig, Telepath, TextDecoder
+from utils.metrics import position_in_cycle
 
 torch.set_grad_enabled(False)
 
@@ -32,6 +33,14 @@ ref_model = WhisperForConditionalGeneration.from_pretrained(config.pretrained_wh
 
 def get_rtol(a, b):
     return torch.abs(a - b) / torch.abs(b)
+
+
+def test_position_in_cycle():
+    for i in range(1, 21):
+        if i < 11:
+            assert position_in_cycle((i, 10)) == i
+        else:
+            assert position_in_cycle((i, 10)) == i - 10
 
 
 def test_encoder_conv1():
