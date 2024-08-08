@@ -87,11 +87,6 @@ ELECTRODE_ORDER = np.array(
     ]
 )
 
-SESSIONS_PER_SUBJECT = 4
-
-
-SESSION_EPOCHS = {"train": 16710, "test": 4080}
-
 
 def extract_things_100ms_ds(
     root_dir: str,
@@ -122,7 +117,13 @@ def extract_things_100ms_ds(
     """
     ds_str = "".join([str(sub) for sub in subjects]) + str(epoch_start) + str(epoch_end)
     if is_test_run:
+        sessions_per_subject = 1
+        session_epochs = {"train": 120, "test": 120}
         ds_str += "_test"
+    else:
+        sessions_per_subject = 4
+        session_epochs = {"train": 16710, "test": 4080}
+
     epoch_length = epoch_end - epoch_start
     target_obj_onset_idx = -1 * epoch_start
     if validation_type != ValidationType.DEFAULT:
@@ -145,14 +146,12 @@ def extract_things_100ms_ds(
     ) and not reset_cache
     logger.info(f"Using cached dataset: {cached}.")
     split_shape = lambda epochs_per_session: (
-        len(subjects) * SESSIONS_PER_SUBJECT * epochs_per_session,
+        len(subjects) * sessions_per_subject * epochs_per_session,
         len(ELECTRODE_ORDER) + 1,  # +1 for the stimulus channel.
         epoch_end - epoch_start,
     )
-    train_split_shape = split_shape(SESSION_EPOCHS["train"] if not is_test_run else 1)
-    test_split_shape = (
-        split_shape(SESSION_EPOCHS["test"]) if not is_test_run else train_split_shape
-    )
+    train_split_shape = split_shape(session_epochs["train"])
+    test_split_shape = split_shape(session_epochs["test"])
     ds = {
         "train": np.memmap(
             dtype=np.float32,
@@ -171,9 +170,7 @@ def extract_things_100ms_ds(
         return ds
     total_rows = sum(
         [
-            (SESSION_EPOCHS[split_type] if not is_test_run else 1)
-            * SESSIONS_PER_SUBJECT
-            * len(subjects)
+            session_epochs[split_type] * sessions_per_subject * len(subjects)
             for split_type in ds.keys()
         ]
     )
@@ -181,7 +178,7 @@ def extract_things_100ms_ds(
     pbar = tqdm(total=total_rows, desc="Extracting EEG Data.")
     n = 0
     for sub_i, sub in enumerate(subjects):
-        for ses_i, ses in enumerate(range(1, SESSIONS_PER_SUBJECT + 1)):
+        for ses_i, ses in enumerate(range(1, sessions_per_subject + 1)):
             for split_type in split_types:
                 path = os.path.join(
                     root_dir,
@@ -225,8 +222,8 @@ def extract_things_100ms_ds(
                         continue
                     # Get the absolute index of the current epoch.
                     n = (
-                        sub_i * SESSIONS_PER_SUBJECT * SESSION_EPOCHS[split_type]
-                        + ses_i * SESSION_EPOCHS[split_type]
+                        sub_i * sessions_per_subject * session_epochs[split_type]
+                        + ses_i * session_epochs[split_type]
                         + epoch_i
                     )
                     # Slice the current epoch out of the data stream.
@@ -241,7 +238,7 @@ def extract_things_100ms_ds(
                     )
                     pbar.update(1)
                     epoch_i += 1
-                    if is_test_run:
+                    if is_test_run and epoch_i >= session_epochs[split_type]:
                         break
     if is_test_run:
         ds["test"] = ds["train"].copy()

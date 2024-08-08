@@ -212,12 +212,15 @@ def main(
         )
 
     while True:
+        is_accumulating = metrics[
+            "microstep"
+        ].value % grad_accum_steps != 0 and metrics["epochmicrostep"].value != len(
+            train_dataloader
+        )
         # Forward and backward pass.
         # Do no sync gradients whilst accumulating.
         ddp_context = (
-            nullcontext()
-            if world_size == 1 or metrics["microstep"].value % grad_accum_steps != 0
-            else model.no_sync()
+            nullcontext() if world_size == 1 or is_accumulating else model.no_sync()
         )
         # torch.cuda.memory._record_memory_history()
         with ddp_context:
@@ -227,14 +230,15 @@ def main(
             metrics["train_loss"].update(loss.item())
             # Get the next batch straight away without blocking whilst we compute the backward pass,
             # unless we are at the end of the epoch.
-            if metrics["epochmicrostep"].value < len(train_dataloader):
+
+            if metrics["epochmicrostep"].value < len(train_dataloader) - 1:
                 micro_batch = get_microbatch(train_dataloader_iterator, rank)
             scaler.scale(loss).backward()  # type: ignore
 
         # torch.cuda.memory._dump_snapshot("my_snapshot_checkpointed.pickle")
         # break
         # If we are still accumulating gradients then skip gradient application and logging.
-        if metrics["microstep"].value % grad_accum_steps != 0:
+        if is_accumulating:
             metrics["microstep"].update(1)
             metrics["epochmicrostep"].update(
                 (metrics["microstep"].value, len(train_dataloader))
@@ -266,7 +270,7 @@ def main(
                     metric.log(key)
             if is_main_process:
                 wandb.log({}, commit=True)
-        if metrics["step"].value % steps_per_epoch == 0:
+        if metrics["epochmicrostep"].value == len(train_dataloader):
             if is_main_process and checkpoints:
                 torch.save(
                     model.module,
