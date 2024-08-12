@@ -417,11 +417,13 @@ class Telepath(nn.Module):
         # Flatten logits tensor (B x T-1 x V) to 2D tensor ((B T-1) x V) for loss calculation.
         logits = logits.view(-1, logits.size(-1))
         # Mask all padding tokens except the first which are being used as stop tokens.
-        padding_mask = token_ids == self.config.decoder_stop_token
-        stop_token_indices = (padding_mask == 1).to(torch.long).argmax(dim=1)
-        padding_mask[torch.arange(padding_mask.shape[0]), stop_token_indices] = 0
+        loss_mask = token_ids == self.config.decoder_stop_token
+        stop_token_indices = (loss_mask == 1).to(torch.long).argmax(dim=1)
+        batch_indices = torch.arange(loss_mask.shape[0])
+        loss_mask[batch_indices, stop_token_indices] = 0
+        loss_mask[batch_indices, self.start_sequence :] = 1
         labels = token_ids.clone()
-        labels[padding_mask] = -100
+        labels[loss_mask] = -100
         # Shift and flatten labels (B x T) to 1D tensor (B T-1).
         labels = labels[:, 1:].contiguous().view(-1)
         # Mask special tokens in the loss function, except for the first EOS token.
