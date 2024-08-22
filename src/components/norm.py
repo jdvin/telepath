@@ -34,24 +34,15 @@ class Affine(nn.Module):
         return self.weight * x + self.bias
 
 
-# class LayerNorm(nn.Module):
-#     """Layernorm with composability."""
+class RMSNorm(nn.Module):
+    def __init__(self, hidden_size, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.eps = eps
 
-#     def __init__(
-#         self, size: int, shift=True, scale=True, eps=1e-5, affine=True, bias=True
-#     ):
-#         super().__init__()
-#         graph = []
-#         if shift:
-#             graph.append(Shift())
-#         if scale:
-#             graph.append(Scale(eps))
-#         if affine:
-#             graph.append(Affine(size, bias))
+    def forward(self, x: Tensor):
+        # Root Mean Square Layer Normalization https://arxiv.org/abs/1910.07467
+        variance = x.float().pow(2).mean(-1, keepdim=True)
+        x = x * torch.rsqrt(variance + self.eps)
 
-#         self.graph = nn.Sequential(*graph)
-
-#     def forward(self, x: torch.Tensor) -> torch.Tensor:
-#         """Taken from formula at https://pytorch.org/docs/stable/generated/torch.nn.LayerNorm.html."""
-#         breakpoint()
-#         return self.graph.forward(x.float()).type(x.dtype)
+        return self.weight * x.to(self.weight.dtype)

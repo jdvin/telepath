@@ -11,6 +11,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 import yaml
 
 from .components.attention import MultiHeadAttention
+from .activations import GEGLU
 
 from transformers import WhisperModel, WhisperConfig, WhisperTokenizer
 
@@ -18,7 +19,8 @@ from transformers import WhisperModel, WhisperConfig, WhisperTokenizer
 @dataclass
 class TelepathConfig:
     n_eeg_channels: int
-    pretrained_whisper: str | None
+    encoder_pretrained_model: str | None
+    decoder_pretrained_model: str | None
     decoder_start_sequence: Tensor = tensor([])
     decoder_stop_token: int = 0
     decoder_special_tokens_start: int = 0
@@ -28,6 +30,10 @@ class TelepathConfig:
     n_freqs: int = 0
     fft_hop_length: int = 0
     d_model: int = 0
+    encoder_d_mlp: int = 0
+    encoder_activation: str = ""
+    decoder_d_mlp: int = 0
+    decoder_activation: str = ""
     n_heads: int = 0
     encoder_n_layers: int = 0
     decoder_n_layers: int = 0
@@ -95,6 +101,9 @@ class ResidualAttentionBlock(nn.Module):
         block_size: int,
         d_model: int,
         n_heads: int,
+        d_mlp: int,
+        is_causal: bool,
+        activation: nn.Module = nn.GELU,
         cross_attn: bool = False,
         dropout: float = 0.0,
         scale_exponent: float = -0.25,
@@ -106,6 +115,7 @@ class ResidualAttentionBlock(nn.Module):
             scale=(d_model // n_heads) ** scale_exponent,
             block_size=block_size,
             dropout=dropout,
+            is_causal=is_causal,
         )
         self.attn_ln = nn.LayerNorm(d_model)
 
@@ -123,10 +133,9 @@ class ResidualAttentionBlock(nn.Module):
         )
         self.cross_attn_ln = nn.LayerNorm(d_model) if cross_attn else None
 
-        d_mlp = 4 * d_model
         self.mlp = nn.Sequential(
             nn.Linear(d_model, d_mlp),
-            nn.GELU(),
+            activation(),
             nn.Linear(d_mlp, d_model),
         )
         self.mlp_ln = nn.LayerNorm(d_model)
@@ -159,6 +168,7 @@ class NeuralEncoder(nn.Module):
         n_freqs: int,
         block_size: int,
         d_model: int,
+        d_mlp: int,
         n_heads: int,
         dropout: float,
         n_layers: int,
@@ -194,8 +204,10 @@ class NeuralEncoder(nn.Module):
                 block_size,
                 d_model,
                 n_heads,
+                d_mlp=d_mlp,
                 dropout=dropout,
                 scale_exponent=scale_exponent,
+                is_causal=False,
             )
             for _ in range(n_layers)
         )
@@ -257,6 +269,7 @@ class TextDecoder(nn.Module):
         n_vocab: int,
         n_ctx: int,
         d_model: int,
+        d_mlp: int,
         n_head: int,
         n_layer: int,
         checkpoint_activations: bool = False,
@@ -267,7 +280,13 @@ class TextDecoder(nn.Module):
         self.embed_positions = nn.Embedding(n_ctx, d_model)
         self.blocks = nn.ModuleList(
             ResidualAttentionBlock(
-                n_ctx, d_model, n_head, cross_attn=True, scale_exponent=scale_exponent
+                n_ctx,
+                d_model,
+                n_head,
+                d_mlp=d_mlp,
+                cross_attn=True,
+                scale_exponent=scale_exponent,
+                is_causal=True,
             )
             for _ in range(n_layer)
         )
