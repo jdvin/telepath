@@ -150,7 +150,7 @@ class RelativePositionMultiHeadAttention(MultiHeadAttention):
         T_q = q.size(2)
         T_kv = k.size(2)
         T_cached = T_kv - T_q
-        bias = +self.bias[:, :, :T_kv, T_cached:T_kv] + self.rp_bias(
+        bias = self.bias[:, :, :T_kv, T_cached:T_kv] + self.rp_bias(
             self.block_size, k.size(1)
         )[:, :, -T_q:, :].transpose(-1, -2)
         return super().qkv_attention(

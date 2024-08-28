@@ -10,10 +10,10 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 import yaml
 
-from .components.attention import MultiHeadAttention
+from .components.attention import MultiHeadAttention, RelativePositionMultiHeadAttention
 from .activations import GEGLU
 
-from transformers import WhisperModel, WhisperConfig, WhisperTokenizer
+from transformers import AutoModel, AutoTokenizer, T5ForConditionalGeneration
 
 
 @dataclass
@@ -98,7 +98,8 @@ def sinusoids(length: int, channels: int, max_timescale: int = 1000):
 class ResidualAttentionBlock(nn.Module):
     def __init__(
         self,
-        block_size: int,
+        source_seq_len: int,
+        target_seq_len: int,
         d_model: int,
         n_heads: int,
         d_mlp: int,
@@ -113,7 +114,8 @@ class ResidualAttentionBlock(nn.Module):
             n_heads=n_heads,
             d_model=d_model,
             scale=(d_model // n_heads) ** scale_exponent,
-            block_size=block_size,
+            source_seq_len=source_seq_len,
+            target_seq_len=source_seq_len,
             dropout=dropout,
             is_causal=is_causal,
         )
@@ -123,9 +125,10 @@ class ResidualAttentionBlock(nn.Module):
             MultiHeadAttention(
                 n_heads,
                 d_model,
+                source_seq_len=source_seq_len,
+                target_seq_len=target_seq_len,
                 scale=(d_model // n_heads) ** scale_exponent,
                 k_bias=True,
-                block_size=block_size,
                 dropout=dropout,
             )
             if cross_attn
@@ -159,6 +162,63 @@ class ResidualAttentionBlock(nn.Module):
             )
         x = x + self.mlp(self.mlp_ln(x))
         return x
+
+
+class RelativePositionResidualAttentionBlock(nn.Module):
+    def __init__(
+        self,
+        source_seq_len: int,
+        target_seq_len: int,
+        d_model: int,
+        n_heads: int,
+        d_mlp: int,
+        is_causal: bool,
+        activation: nn.Module = GEGLU,
+        cross_attn: bool = False,
+        dropout: float = 0.1,
+        scale_exponent: float = 0,
+    ):
+        super().__init__(
+            source_seq_len=source_seq_len,
+            target_seq_len=target_seq_len,
+            d_model=d_model,
+            n_heads=n_heads,
+            d_mlp=d_mlp,
+            is_causal=is_causal,
+            activation=activation,
+            cross_attn=cross_attn,
+            dropout=dropout,
+            scale_exponent=scale_exponent,
+        )
+        self.attn = RelativePositionMultiHeadAttention(
+            n_heads=n_heads,
+            d_model=d_model,
+            source_seq_len=source_seq_len,
+            target_seq_len=target_seq_len,
+            q_bias=False,
+            k_bias=False,
+            v_bias=False,
+            out_bias=False,
+            scale=1,
+            dropout=0.1,
+            is_causal=is_causal,
+        )
+
+        self.cross_attn = (
+            MultiHeadAttention(
+                n_heads,
+                d_model,
+                source_seq_len=source_seq_len,
+                target_seq_len=target_seq_len,
+                scale=1,
+                q_bias=False,
+                k_bias=False,
+                v_bias=False,
+                dropout=dropout,
+            )
+            if cross_attn
+            else None
+        )
 
 
 class NeuralEncoder(nn.Module):
@@ -201,6 +261,7 @@ class NeuralEncoder(nn.Module):
 
         self.blocks = nn.ModuleList(
             ResidualAttentionBlock(
+                block_size,
                 block_size,
                 d_model,
                 n_heads,
