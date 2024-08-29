@@ -48,8 +48,9 @@ class MultiHeadAttention(torch.nn.Module):
                 torch.triu(torch.ones(target_seq_len, source_seq_len)).bool(),
                 float("-inf"),
             )
+        self.bias = self.bias.view(1, 1, -1, -1)
 
-        self.register_buffer("bias", bias.view(1, 1, -1, -1))
+        self.register_buffer("bias", bias.view(1, self.n_heads, -1, -1))
 
     def split_heads(self, x: torch.Tensor, B: int, T: int, D: int) -> torch.Tensor:
         """Split matrices into heads and reshape to have heads as child ranks."""
@@ -60,7 +61,7 @@ class MultiHeadAttention(torch.nn.Module):
         q: Tensor,
         k: Tensor,
         v: Tensor,
-        attention_mask: Tensor | None = None,
+        attention_mask: Tensor,
     ) -> Tensor:
         """
         Args:
@@ -76,17 +77,14 @@ class MultiHeadAttention(torch.nn.Module):
                 v,
                 attn_mask=attention_mask,
                 dropout_p=self.dropout if self.training else 0,
-                is_causal=self.is_causal and attention_mask is None,
                 scale=self.scale,
             )
 
         else:
             # (B, nhead, T_q, D_head) x (B, nhead, D_head, T_kv) -> (B, nhead, T_q, T_kv).
             qk = (q @ k.transpose(-2, -1)) * self.scale
-            # Fill the upper triangle. Effectively a no-op if not causal.
-            qk = (
-                qk + attention_mask + self.bias[:, :, -T_q : self.source_seq_len, :T_kv]
-            )
+            # Add attention bias (input masking, causal masking, relative pos, etc).
+            qk = qk + attention_mask
             attn = F.softmax(qk, dim=-1, dtype=torch.float32).type_as(qk)
             attn = self.attn_dropout(attn) if self.training else attn
             # (B, nhead, T, T) x (B, nhead, T, D_head) -> (B, nhead, T, D_head).
@@ -125,7 +123,10 @@ class MultiHeadAttention(torch.nn.Module):
         q = self.split_heads(q, B, T_q, D)
         k = self.split_heads(k, B, T_kv, D)
         v = self.split_heads(v, B, T_kv, D)
-        y = self.qkv_attention(q, k, v, attention_mask)
+        bias = self.bias[:, :, :T_kv, T_cached:T_kv]
+        y = self.qkv_attention(
+            q, k, v, bias if attention_mask is None else bias + attention_mask
+        )
         # Flatten heads.
         y = y.transpose(1, 2).contiguous().view(B, T_q, D)
         y = self.out_proj(y)
@@ -135,24 +136,13 @@ class MultiHeadAttention(torch.nn.Module):
 class RelativePositionMultiHeadAttention(MultiHeadAttention):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.rp_bias = RelativePositionBias(n_heads=self.n_heads)
+        self.register_buffer(
+            "rp_bias",
+            RelativePositionBias(n_heads=self.n_heads)(
+                self.source_seq_len, self.target_seq_len
+            ),
+        )
+        self.bias = self.bias + self.rp_bias
         assert (
             self.source_seq_len == self.target_seq_len
         ), "Relative position MHA can only be used in self-attention!"
-
-    def qkv_attention(
-        self,
-        q: Tensor,
-        k: Tensor,
-        v: Tensor,
-        attention_mask: Tensor | None = None,
-    ) -> Tensor:
-        T_q = q.size(2)
-        T_kv = k.size(2)
-        T_cached = T_kv - T_q
-        bias = self.bias[:, :, :T_kv, T_cached:T_kv] + self.rp_bias(
-            self.block_size, k.size(1)
-        )[:, :, -T_q:, :].transpose(-1, -2)
-        return super().qkv_attention(
-            q, k, v, attention_mask + bias if attention_mask else bias
-        )

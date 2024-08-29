@@ -20,10 +20,11 @@ from transformers import AutoModel, AutoTokenizer, T5ForConditionalGeneration
 class TelepathConfig:
     n_eeg_channels: int
     encoder_pretrained_model: str | None
+    encoder_sd_prefix: str | None
     decoder_pretrained_model: str | None
+    decoder_sd_prefix: str | None
     decoder_start_sequence: Tensor = tensor([])
     decoder_stop_token: int = 0
-    decoder_special_tokens_start: int = 0
     decoder_vocab_size: int = 0
     encoder_block_size: int = 0
     decoder_block_size: int = 0
