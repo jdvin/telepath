@@ -11,9 +11,72 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 import yaml
 
 from .components.attention import MultiHeadAttention, RelativePositionMultiHeadAttention
-from .activations import GEGLU
+from .components.activations import GEGLU
 
 from transformers import AutoModel, AutoTokenizer, T5ForConditionalGeneration
+
+
+@dataclass
+class ParamMap:
+    map: dict[str, str | None]
+    carry_forward_indices: set[int]
+
+    def __getitem__(self, key: str) -> str:
+        out = self.map.get(key, key)
+        assert out is not None
+        return out
+
+    def map_params(self, pn: str) -> str:
+        out_pns = []
+        carry = ""
+        for i, seg in enumerate(pn.split(".")):
+            carry += seg
+            if i in self.carry_forward_indices:
+                continue
+            if carry:
+                out_pns.append(self[carry])
+                carry = ""
+
+        return ".".join(out_pns)
+
+
+ENCODER_PARAM_MAP = ParamMap(
+    {
+        "layers": "blocks",
+        "self_attn": "attn",
+        "self_attn_layer_norm": "attn_ln",  # .graph.2",
+        "fc1": "mlp.0",
+        "fc2": "mlp.2",
+        "final_layer_norm": "mlp_ln",  # .graph.2",
+        "layer_norm": "ln_post",  # .graph.2",
+        "encoder_attn": "cross_attn",
+        "encoder_attn_layer_norm": "cross_attn_ln",  # .graph.2",
+    },
+    set(),
+)
+
+DECODER_PARAM_MAP = ParamMap(
+    {
+        "block": "blocks",
+        "layer": "",
+        "0SelfAttention": "attn",
+        "q": "q_proj",
+        "k": "k_proj",
+        "v": "v_proj",
+        "o": "out_proj",
+        "relative_attention_bias": "rp_bias",
+        "0layer_norm": "attn_ln",
+        "1EncDecAttention": "cross_attn",
+        "1layer_norm": "cross_attn_ln",
+        "2DenseReluDense": "mlp",
+        "2layer_norm": "mlp_ln",
+        "wi_0": "0.W",
+        "wi_1": "0.V",
+        "wo": "1",
+        "2layer_norm": "mlp_ln",
+    },
+    {3},
+)
 
 
 @dataclass
@@ -165,7 +228,7 @@ class ResidualAttentionBlock(nn.Module):
         return x
 
 
-class RelativePositionResidualAttentionBlock(nn.Module):
+class RelativePositionResidualAttentionBlock(ResidualAttentionBlock):
     def __init__(
         self,
         source_seq_len: int,
@@ -174,7 +237,7 @@ class RelativePositionResidualAttentionBlock(nn.Module):
         n_heads: int,
         d_mlp: int,
         is_causal: bool,
-        activation: nn.Module = GEGLU,
+        activation: nn.Module = nn.GELU,
         cross_attn: bool = False,
         dropout: float = 0.1,
         scale_exponent: float = 0,
@@ -219,6 +282,10 @@ class RelativePositionResidualAttentionBlock(nn.Module):
             )
             if cross_attn
             else None
+        )
+        self.mlp = nn.Sequential(
+            GEGLU(d_model, d_mlp),
+            nn.Linear(d_mlp, d_model),
         )
 
 
@@ -335,13 +402,13 @@ class TextDecoder(nn.Module):
         n_head: int,
         n_layer: int,
         checkpoint_activations: bool = False,
-        scale_exponent: float = -0.25,
+        scale_exponent: float = 0,
     ):
         super().__init__()
         self.embed_tokens = nn.Embedding(n_vocab, d_model)
-        self.embed_positions = nn.Embedding(n_ctx, d_model)
         self.blocks = nn.ModuleList(
-            ResidualAttentionBlock(
+            RelativePositionResidualAttentionBlock(
+                n_ctx,
                 n_ctx,
                 d_model,
                 n_head,
@@ -367,8 +434,7 @@ class TextDecoder(nn.Module):
         inference: bool = False,
     ) -> Tensor:
         offset = kv_cache[next(iter(kv_cache.keys()))].size(1) if kv_cache else 0
-        x = self.embed_tokens(x)
-        x = x + self.embed_positions.weight[: x.shape[1]]
+        x = self.embed_tokens(x[:, offset:])
         if self.checkpoint_activations:
             x = checkpoint_sequential(
                 self.blocks, len(self.blocks), x, use_reentrant=False
@@ -446,6 +512,7 @@ class Telepath(nn.Module):
             n_freqs=config.n_freqs,
             block_size=config.encoder_block_size,
             d_model=config.d_model,
+            d_mlp=4 * config.d_model,
             n_heads=config.n_heads,
             n_layers=config.encoder_n_layers,
             dropout=config.dropout,
@@ -456,6 +523,7 @@ class Telepath(nn.Module):
             n_vocab=config.decoder_vocab_size,
             n_ctx=config.decoder_block_size,
             d_model=config.d_model,
+            d_mlp=2 * config.d_model,
             n_head=config.n_heads,
             n_layer=config.decoder_n_layers,
             scale_exponent=config.scale_exponent,
@@ -564,26 +632,13 @@ class Telepath(nn.Module):
         """Initialize the model from pretrained Whisper."""
         ptw = WhisperModel.from_pretrained(config.pretrained_whisper)
         assert isinstance(ptw, WhisperModel)
-        param_map = {
-            "layers": "blocks",
-            "self_attn": "attn",
-            "self_attn_layer_norm": "attn_ln",  # .graph.2",
-            "fc1": "mlp.0",
-            "fc2": "mlp.2",
-            "final_layer_norm": "mlp_ln",  # .graph.2",
-            "layer_norm": "ln_post",  # .graph.2",
-            "encoder_attn": "cross_attn",
-            "encoder_attn_layer_norm": "cross_attn_ln",  # .graph.2",
-        }
-        map_params = lambda pn: ".".join(
-            [param_map.get(seg, seg) for seg in pn.split(".")]
-        )
+
         nw = cls(config)
         new_keys = list(nw.state_dict().keys())
         nw_sd = nw.state_dict()
         for key, param in ptw.state_dict().items():
             param: Tensor
-            new_key = map_params(key)
+            new_key = map_params(key, ...)
             assert new_key in new_keys, f"{new_key}"
             if "conv" in key and "weight" in key:
                 # Reshape the Whisper 1D conv weights to our 2D grouped conv weights

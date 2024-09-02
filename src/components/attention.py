@@ -48,9 +48,9 @@ class MultiHeadAttention(torch.nn.Module):
                 torch.triu(torch.ones(target_seq_len, source_seq_len)).bool(),
                 float("-inf"),
             )
-        self.bias = self.bias.view(1, 1, -1, -1)
-
-        self.register_buffer("bias", bias.view(1, self.n_heads, -1, -1))
+        self.register_buffer(
+            "bias", bias.expand(1, self.n_heads, target_seq_len, source_seq_len)
+        )
 
     def split_heads(self, x: torch.Tensor, B: int, T: int, D: int) -> torch.Tensor:
         """Split matrices into heads and reshape to have heads as child ranks."""

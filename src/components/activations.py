@@ -9,10 +9,10 @@ class GEGLU(nn.Module):
         https://arxiv.org/abs/2002.05202
     """
 
-    def geglu(self, x: Tensor) -> Tensor:
-        assert x.shape[-1] % 2 == 0
-        a, b = x.chunk(2, dim=-1)
-        return a * F.gelu(b)
+    def __init__(self, d_in: int, d_out: int, bias: bool = False):
+        super().__init__()
+        self.W = nn.Linear(d_in, d_out, bias=bias)
+        self.V = nn.Linear(d_in, d_out, bias=bias)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.geglu(x)
+        return F.gelu(self.W(x)) * self.V(x)
