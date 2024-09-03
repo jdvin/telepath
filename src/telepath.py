@@ -13,7 +13,11 @@ import yaml
 from .components.attention import MultiHeadAttention, RelativePositionMultiHeadAttention
 from .components.activations import GEGLU
 
-from transformers import AutoModel, AutoTokenizer, T5ForConditionalGeneration
+from transformers import (
+    AutoTokenizer,
+    T5ForConditionalGeneration,
+    WhisperModel,
+)
 
 
 @dataclass
@@ -26,7 +30,7 @@ class ParamMap:
         assert out is not None
         return out
 
-    def map_params(self, pn: str) -> str:
+    def map_param(self, pn: str) -> str:
         out_pns = []
         carry = ""
         for i, seg in enumerate(pn.split(".")):
@@ -102,7 +106,7 @@ class TelepathConfig:
     encoder_n_layers: int = 0
     decoder_n_layers: int = 0
     dropout: float = 0.1
-    scale_exponent: float = -0.25
+    encoder_scale_exponent: float = -0.25
     train_decoder: bool = True
 
     @classmethod
@@ -391,6 +395,44 @@ class NeuralEncoder(nn.Module):
         )
         return optim_groups
 
+    @classmethod
+    def from_pretrained(cls, config: TelepathConfig):
+        e_pt = WhisperModel.from_pretrained(config.decoder_pretrained_model)
+        assert isinstance(e_pt, WhisperModel)
+
+        e_n = cls(
+            n_channels=config.n_eeg_channels,
+            n_freqs=config.n_freqs,
+            block_size=config.encoder_block_size,
+            d_model=config.d_model,
+            d_mlp=config.encoder_d_mlp,
+            n_heads=config.n_heads,
+            dropout=config.dropout,
+            n_layers=config.encoder_n_layers,
+            scale_exponent=config.encoder_scale_exponent,
+        )
+
+        new_keys = list(e_n.state_dict().keys())
+        nw_sd = e_n.state_dict()
+        for key, param in e_pt.state_dict().items():
+            param: Tensor
+            new_key = ENCODER_PARAM_MAP.map_param(key)
+            assert new_key in new_keys, f"{new_key}"
+            if "conv" in key and "weight" in key:
+                # Reshape the Whisper 1D conv weights to our 2D grouped conv weights
+                out_channels, in_channels, kernel_size = param.shape
+                param = param.unsqueeze(1).repeat(1, config.n_eeg_channels, 1, 1)
+                param = param.reshape(
+                    out_channels * config.n_eeg_channels, in_channels, kernel_size
+                )
+
+            if key == "encoder.embed_positions.weight":
+                param = param[: config.encoder_block_size, :]
+
+            nw_sd[new_key] = param.clone()
+        e_n.load_state_dict(nw_sd)
+        return e_n
+
 
 class TextDecoder(nn.Module):
     def __init__(
@@ -501,6 +543,33 @@ class TextDecoder(nn.Module):
             generations[batch_index] = input_ids[i, :].tolist()
         return generations
 
+    @classmethod
+    def from_pretrained(cls, config: TelepathConfig):
+        d_pt = T5ForConditionalGeneration.from_pretrained(
+            config.decoder_pretrained_model
+        )
+        assert isinstance(d_pt, T5ForConditionalGeneration)
+
+        d_n = cls(
+            n_vocab=config.decoder_vocab_size,
+            n_ctx=config.decoder_block_size,
+            d_model=config.d_model,
+            d_mlp=config.decoder_d_mlp,
+            n_head=config.n_heads,
+            n_layer=config.decoder_n_layers,
+        )
+
+        new_keys = list(d_n.state_dict().keys())
+        nw_sd = d_n.state_dict()
+        for key, param in d_pt.get_decoder().state_dict().items():
+            param: Tensor
+            new_key = DECODER_PARAM_MAP.map_param(key)
+            assert new_key in new_keys, f"{new_key}"
+
+            nw_sd[new_key] = param.clone()
+        d_n.load_state_dict(nw_sd)
+        return d_n
+
 
 class Telepath(nn.Module):
     def __init__(self, config: TelepathConfig):
@@ -516,7 +585,7 @@ class Telepath(nn.Module):
             n_heads=config.n_heads,
             n_layers=config.encoder_n_layers,
             dropout=config.dropout,
-            scale_exponent=config.scale_exponent,
+            scale_exponent=config.encoder_scale_exponent,
         )
 
         self.decoder = TextDecoder(
@@ -526,7 +595,6 @@ class Telepath(nn.Module):
             d_mlp=2 * config.d_model,
             n_head=config.n_heads,
             n_layer=config.decoder_n_layers,
-            scale_exponent=config.scale_exponent,
         )
 
         if not config.train_decoder:
@@ -536,11 +604,7 @@ class Telepath(nn.Module):
         self.start_sequence = config.decoder_start_sequence
         self.stop_token = config.decoder_stop_token
 
-        # Translate from neural code to english please.
-        assert isinstance(self.config.pretrained_whisper, str)
-        self.tokenizer = WhisperTokenizer.from_pretrained(
-            self.config.pretrained_whisper, task="translation", language="en"
-        )
+        self.tokenizer = AutoTokenizer.from_pretrained(config.decoder_pretrained_model)
 
     def forward(
         self, eeg: Tensor, input_ids: Tensor, attention_mask: Tensor | None = None
@@ -630,30 +694,8 @@ class Telepath(nn.Module):
     @classmethod
     def from_pretrained(cls, config: TelepathConfig):
         """Initialize the model from pretrained Whisper."""
-        ptw = WhisperModel.from_pretrained(config.pretrained_whisper)
-        assert isinstance(ptw, WhisperModel)
 
-        nw = cls(config)
-        new_keys = list(nw.state_dict().keys())
-        nw_sd = nw.state_dict()
-        for key, param in ptw.state_dict().items():
-            param: Tensor
-            new_key = map_params(key, ...)
-            assert new_key in new_keys, f"{new_key}"
-            if "conv" in key and "weight" in key:
-                # Reshape the Whisper 1D conv weights to our 2D grouped conv weights
-                out_channels, in_channels, kernel_size = param.shape
-                param = param.unsqueeze(1).repeat(1, config.n_eeg_channels, 1, 1)
-                param = param.reshape(
-                    out_channels * config.n_eeg_channels, in_channels, kernel_size
-                )
-
-            if key == "decoder.embed_positions.weight":
-                param = param[: config.decoder_block_size, :]
-
-            if key == "encoder.embed_positions.weight":
-                param = param[: config.encoder_block_size, :]
-
-            nw_sd[new_key] = param.clone()
-        nw.load_state_dict(nw_sd)
-        return nw
+        model = cls(config)
+        model.encoder = NeuralEncoder.from_pretrained(config)
+        model.decoder = TextDecoder.from_pretrained(config)
+        return model
