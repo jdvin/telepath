@@ -1,5 +1,6 @@
 n_eeg_channels: 63
 encoder_block_size: 100
 decoder_block_size: 15
-pretrained_whisper: openai/whisper-medium.en
+encoder_pretrained_model: openai/whisper-medium.en
+decoder_pretrained_model: google/t5-v1_1-large
 fft_hop_length: 2

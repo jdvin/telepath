@@ -17,23 +17,19 @@ resid = None
 ref_activations = None
 ref_resid = None
 
-dec = TextDecoder(1024, 10, 1024, 2048, 16, 8)
-t5 = AutoModel.from_pretrained("google/t5-v1_1-small")
 
-for t5_key, tp_key in zip(t5.decoder.state_dict().keys(), dec.state_dict().keys()):
-    print(t5_key, tp_key)
+config = TelepathConfig(
+    encoder_pretrained_model="openai/whisper-small",
+    decoder_pretrained_model="google/t5-v1_1-base",
+    n_eeg_channels=1,
+    fft_hop_length=1,
+    encoder_block_size=1500,
+    decoder_block_size=10,
+    dropout=0.0,
+    encoder_scale_exponent=-0.5,
+)
 
-# config = TelepathConfig(
-#     pretrained_whisper="openai/whisper-tiny",
-#     n_eeg_channels=1,
-#     fft_hop_length=1,
-#     encoder_block_size=1500,
-#     decoder_block_size=10,
-#     dropout=0.0,
-#     scale_exponent=-0.5,
-# )
-
-# model = Telepath.from_pretrained(config)
+model = Telepath.from_pretrained(config)
 # ref_model = WhisperForConditionalGeneration.from_pretrained(config.pretrained_whisper)
 
 

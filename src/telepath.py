@@ -14,9 +14,12 @@ from .components.attention import MultiHeadAttention, RelativePositionMultiHeadA
 from .components.activations import GEGLU
 
 from transformers import (
+    AutoModel,
     AutoTokenizer,
-    T5ForConditionalGeneration,
     WhisperModel,
+    WhisperConfig,
+    T5ForConditionalGeneration,
+    T5Config,
 )
 
 
@@ -37,15 +40,17 @@ class ParamMap:
             carry += seg
             if i in self.carry_forward_indices:
                 continue
-            if carry:
-                out_pns.append(self[carry])
-                carry = ""
+            if mapped_seg := self[carry]:
+                # print(carry, mapped_seg)
+                out_pns.append(mapped_seg)
+            carry = ""
 
         return ".".join(out_pns)
 
 
 ENCODER_PARAM_MAP = ParamMap(
     {
+        "encoder": "",
         "layers": "blocks",
         "self_attn": "attn",
         "self_attn_layer_norm": "attn_ln",  # .graph.2",
@@ -61,6 +66,7 @@ ENCODER_PARAM_MAP = ParamMap(
 
 DECODER_PARAM_MAP = ParamMap(
     {
+        "decoder": "",
         "block": "blocks",
         "layer": "",
         "0SelfAttention": "attn",
@@ -78,6 +84,7 @@ DECODER_PARAM_MAP = ParamMap(
         "wi_1": "0.V",
         "wo": "1",
         "2layer_norm": "mlp_ln",
+        "final_layer_norm": "ln_post",
     },
     {3},
 )
@@ -87,10 +94,8 @@ DECODER_PARAM_MAP = ParamMap(
 class TelepathConfig:
     n_eeg_channels: int
     encoder_pretrained_model: str | None
-    encoder_sd_prefix: str | None
     decoder_pretrained_model: str | None
-    decoder_sd_prefix: str | None
-    decoder_start_sequence: Tensor = tensor([])
+    decoder_start_sequence: Tensor = tensor([1484, 9709, 7314, 10])
     decoder_stop_token: int = 0
     decoder_vocab_size: int = 0
     encoder_block_size: int = 0
@@ -117,38 +122,29 @@ class TelepathConfig:
 
     def __post_init__(self):
         """There is definitely a better way."""
-        if self.pretrained_whisper:
-            pt_whisper_config = WhisperConfig.from_pretrained(self.pretrained_whisper)
-            # Translate from the neural code to english, please.
-            tokenizer = WhisperTokenizer.from_pretrained(
-                self.pretrained_whisper, task="translate", language="english"
+        if self.encoder_pretrained_model:
+            encoder_config = WhisperConfig.from_pretrained(
+                self.encoder_pretrained_model
             )
-            assert isinstance(tokenizer, WhisperTokenizer)
-            self.decoder_vocab_size = pt_whisper_config.vocab_size
             # TODO:
             # We want to the channel dimension of the spectrogram to align with the channel dimension of the whisper feature extractor.
             # It is an open question whether or not doing a straight exrtraction of the N equidistant frequencies is the best approach,
             # or whether we should instead construct a neural equivalent of the mel scale.
-            self.n_freqs = pt_whisper_config.num_mel_bins
-            self.d_model = pt_whisper_config.d_model
-            assert (
-                pt_whisper_config.decoder_attention_heads
-                == pt_whisper_config.encoder_attention_heads
-            )
-            self.n_heads = pt_whisper_config.encoder_attention_heads
-            self.encoder_n_layers = (
-                self.encoder_n_layers or pt_whisper_config.encoder_layers
-            )
-            self.decoder_n_layers = (
-                self.decoder_n_layers or pt_whisper_config.decoder_layers
-            )
-            assert isinstance(tokenizer.prefix_tokens, list)
-            self.decoder_start_sequence = torch.tensor(tokenizer.prefix_tokens)
+            self.n_freqs = encoder_config.num_mel_bins
+            self.d_model = encoder_config.d_model
+            self.encoder_d_mlp = encoder_config.encoder_ffn_dim
+            self.n_heads = encoder_config.encoder_attention_heads
+            self.encoder_n_layers = encoder_config.encoder_layers
+
+        if self.decoder_pretrained_model:
+            decoder_config = T5Config.from_pretrained(self.decoder_pretrained_model)
+            assert decoder_config.d_model == self.d_model
+            tokenizer = AutoTokenizer.from_pretrained(self.decoder_pretrained_model)
+            self.decoder_vocab_size = decoder_config.vocab_size
+            self.decoder_n_layers = decoder_config.num_decoder_layers
             assert isinstance(tokenizer.eos_token_id, int)
+            self.decoder_d_mlp = decoder_config.d_ff
             self.decoder_stop_token = tokenizer.eos_token_id
-            self.decoder_special_tokens_start = min(
-                tokenizer.added_tokens_decoder.keys()
-            )
 
 
 def sinusoids(length: int, channels: int, max_timescale: int = 1000):
@@ -397,8 +393,8 @@ class NeuralEncoder(nn.Module):
 
     @classmethod
     def from_pretrained(cls, config: TelepathConfig):
-        e_pt = WhisperModel.from_pretrained(config.decoder_pretrained_model)
-        assert isinstance(e_pt, WhisperModel)
+        e_pt = WhisperModel.from_pretrained(config.encoder_pretrained_model)
+        assert isinstance(e_pt, WhisperModel), type(e_pt)
 
         e_n = cls(
             n_channels=config.n_eeg_channels,
@@ -411,13 +407,14 @@ class NeuralEncoder(nn.Module):
             n_layers=config.encoder_n_layers,
             scale_exponent=config.encoder_scale_exponent,
         )
+        # breakpoint()
 
         new_keys = list(e_n.state_dict().keys())
         nw_sd = e_n.state_dict()
-        for key, param in e_pt.state_dict().items():
+        for key, param in e_pt.get_encoder().state_dict().items():
             param: Tensor
             new_key = ENCODER_PARAM_MAP.map_param(key)
-            assert new_key in new_keys, f"{new_key}"
+            assert new_key in new_keys, f"{new_key} not in {new_keys}."
             if "conv" in key and "weight" in key:
                 # Reshape the Whisper 1D conv weights to our 2D grouped conv weights
                 out_channels, in_channels, kernel_size = param.shape
@@ -548,7 +545,7 @@ class TextDecoder(nn.Module):
         d_pt = T5ForConditionalGeneration.from_pretrained(
             config.decoder_pretrained_model
         )
-        assert isinstance(d_pt, T5ForConditionalGeneration)
+        assert isinstance(d_pt, T5ForConditionalGeneration), type(d_pt)
 
         d_n = cls(
             n_vocab=config.decoder_vocab_size,
@@ -564,7 +561,7 @@ class TextDecoder(nn.Module):
         for key, param in d_pt.get_decoder().state_dict().items():
             param: Tensor
             new_key = DECODER_PARAM_MAP.map_param(key)
-            assert new_key in new_keys, f"{new_key}"
+            assert new_key in new_keys, f"{new_key} not in {new_keys}."
 
             nw_sd[new_key] = param.clone()
         d_n.load_state_dict(nw_sd)
@@ -581,7 +578,7 @@ class Telepath(nn.Module):
             n_freqs=config.n_freqs,
             block_size=config.encoder_block_size,
             d_model=config.d_model,
-            d_mlp=4 * config.d_model,
+            d_mlp=config.encoder_d_mlp,
             n_heads=config.n_heads,
             n_layers=config.encoder_n_layers,
             dropout=config.dropout,
@@ -592,7 +589,7 @@ class Telepath(nn.Module):
             n_vocab=config.decoder_vocab_size,
             n_ctx=config.decoder_block_size,
             d_model=config.d_model,
-            d_mlp=2 * config.d_model,
+            d_mlp=config.decoder_d_mlp,
             n_head=config.n_heads,
             n_layer=config.decoder_n_layers,
         )
