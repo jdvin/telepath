@@ -1,6 +1,11 @@
 import random
 
-from transformers import AutoModel, AutoTokenizer
+from transformers import (
+    AutoModel,
+    AutoTokenizer,
+    T5ForConditionalGeneration,
+    WhisperModel,
+)
 import torch
 from torch.nn import functional as F
 from matplotlib import pyplot as plt
@@ -30,152 +35,40 @@ config = TelepathConfig(
 )
 
 model = Telepath.from_pretrained(config)
-# ref_model = WhisperForConditionalGeneration.from_pretrained(config.pretrained_whisper)
+ref_encoder = WhisperModel.from_pretrained(
+    config.encoder_pretrained_model
+).get_encoder()
+ref_decoder = T5ForConditionalGeneration.from_pretrained(
+    config.decoder_pretrained_model
+).get_decoder()
 
 
-# def get_rtol(a, b):
-#     return torch.abs(a - b) / torch.abs(b)
+def get_rtol(a, b):
+    return torch.abs(a - b) / torch.abs(b)
 
 
-# def test_position_in_cycle():
-#     for i in range(1, 21):
-#         if i < 11:
-#             assert position_in_cycle((i, 10)) == i
-#         else:
-#             assert position_in_cycle((i, 10)) == i - 10
+def test_position_in_cycle():
+    for i in range(1, 21):
+        if i < 11:
+            assert position_in_cycle((i, 10)) == i
+        else:
+            assert position_in_cycle((i, 10)) == i - 10
 
 
-# def test_encoder_conv1():
-#     global activations
-#     global ref_activations
-#     inputs = torch.rand(3, 80, 1, 3000)
-#     activations = model.encoder.conv1(inputs)
-#     ref_activations = ref_model.get_encoder().conv1(inputs.squeeze(2))
-#     assert torch.allclose(activations.squeeze(2), ref_activations, rtol=1e-3)
-#     print(
-#         "post conv1 rtol:", torch.max(get_rtol(activations.squeeze(2), ref_activations))
-#     )
-
-
-# def test_encoder_conv2():
-#     global activations
-#     global ref_activations
-#     ref_activations = ref_model.get_encoder().conv2(ref_activations)
-#     activations = model.encoder.conv2(activations)
-#     assert torch.allclose(activations.squeeze(2), ref_activations, rtol=1e-3)
-#     print(
-#         "post conv2 rtol:", torch.max(get_rtol(activations.squeeze(2), ref_activations))
-#     )
-
-
-# def test_positional_embeddings():
-#     global activations
-#     global ref_activations
-#     ref_activations = ref_activations.permute(0, 2, 1)
-#     activations = activations.permute(0, 3, 2, 1)
-#     activations = activations + model.encoder.embed_positions.weight[None, :, None, :]
-#     ref_activations = ref_activations + ref_model.get_encoder().embed_positions.weight
-#     activations = activations.reshape(-1, 1500, 384)
-#     assert torch.equal(activations, ref_activations)
-#     print("post pos emb rtol:", torch.max(get_rtol(activations, ref_activations)))
-
-
-# def test_attn_layer_norm():
-#     global activations
-#     global ref_activations
-#     global resid
-#     global ref_resid
-#     resid = activations.detach()
-#     ref_resid = ref_activations.detach()
-#     ref_activations = (
-#         ref_model.get_encoder().layers[0].self_attn_layer_norm(ref_activations)
-#     )
-#     activations = model.encoder.blocks[0].attn_ln(activations)
-#     assert torch.allclose(activations, ref_activations, rtol=1e-3)
-#     print("post attn lnorm rtol:", torch.max(get_rtol(activations, ref_activations)))
-
-
-# def test_attention():
-#     global activations
-#     global ref_activations
-#     ref_activations = ref_model.get_encoder().layers[0].self_attn(ref_activations)[0]
-#     activations = model.encoder.blocks[0].attn(activations)
-#     print(ref_activations.shape)
-#     print(activations.shape)
-#     for i, (batch, ref_batch) in enumerate(zip(activations, ref_activations)):
-#         plt.imsave(f"batch{i}.png", get_rtol(batch, ref_batch))
-#         assert torch.allclose(batch, ref_batch, rtol=1e-3)
-#     assert torch.allclose(
-#         activations, ref_activations, rtol=1e-3
-#     ), f"rtol={torch.max(get_rtol(activations, ref_activations[0]))}"
-#     print("post attn rtol:", torch.max(get_rtol(activations, ref_activations[0])))
-
-
-# def test_attn_residual():
-#     global activations
-#     global ref_activations
-#     global resid
-#     global ref_resid
-#     ref_activations = ref_resid + ref_activations
-#     activations = resid + activations
-#     resid = activations.clone()
-#     ref_resid = ref_activations.clone()
-#     assert torch.allclose(activations, ref_activations, rtol=1e-3)
-#     print("post residual rtol:", torch.max(get_rtol(activations, ref_activations)))
-
-
-# def test_mlp_layer_norm():
-#     global activations
-#     global ref_activations
-#     ref_activations = (
-#         ref_model.get_encoder().layers[0].final_layer_norm(ref_activations)
-#     )
-#     activations = model.encoder.blocks[0].mlp_ln(activations)
-#     assert torch.allclose(activations, ref_activations, rtol=1e-3)
-#     print("post mlp lnorm rtol:", torch.max(get_rtol(activations, ref_activations)))
-
-
-# def test_mlp():
-#     global activations
-#     global ref_activations
-#     mlp = model.encoder.blocks[0].mlp
-#     ref_activations = ref_model.get_encoder().layers[0].fc1(ref_activations)
-#     ref_activations = ref_model.get_encoder().layers[0].activation_fn(ref_activations)
-#     ref_activations = ref_model.get_encoder().layers[0].fc2(ref_activations)
-#     activations = mlp(activations)
-#     assert torch.allclose(activations, ref_activations, rtol=1e-3)
-#     print("post mlp rtol:", torch.max(get_rtol(activations, ref_activations)))
-
-
-# def test_mlp_residual():
-#     global activations
-#     global ref_activations
-#     global resid
-#     global ref_resid
-#     ref_activations = ref_resid + ref_activations
-#     activations = resid + activations
-#     resid = activations.clone()
-#     ref_resid = ref_activations.clone()
-#     assert torch.allclose(activations, ref_activations, rtol=1e-3)
-#     print("post mlp residual rtol:", torch.max(get_rtol(activations, ref_activations)))
-
-
-# def test_encoder_block():
-#     global activations
-#     layer_head_mask = torch.ones(model.encoder.blocks[0].attn.n_heads)
-#     attention_mask = torch.ones(3, 1, 1500, 1500)
-#     ref_activations = ref_model.get_encoder().layers[0](
-#         activations,
-#         attention_mask,
-#         layer_head_mask,
-#     )
-#     activations = model.encoder.blocks[0](activations)
-#     for i, (batch, ref_batch) in enumerate(zip(activations, ref_activations[0])):
-#         plt.imsave(f"enc_batch{i}.png", get_rtol(batch, ref_batch))
-#         # assert torch.allclose(batch, ref_batch, rtol=1e-3)
-#     assert torch.allclose(
-#         activations, ref_activations, rtol=1e-3
-#     ), f"rtol={get_rtol(activations, ref_activations)}"
+def test_encoder():
+    model.encoder.embed_electrodes.weight = torch.nn.Parameter(
+        torch.zeros_like(model.encoder.embed_electrodes.weight)
+    )
+    global activations
+    global ref_activations
+    inputs = torch.rand(3, 1, 80, 3000)
+    activations = model.encoder(inputs)
+    ref_activations = ref_encoder(inputs.squeeze(1), output_hidden_states=True)
+    print(
+        "post encoder rtol:",
+        torch.max(get_rtol(activations, ref_activations.last_hidden_state)),
+    )
+    assert torch.allclose(activations, ref_activations.last_hidden_state, rtol=1e-3)
 
 
 # # iteration = 0

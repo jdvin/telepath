@@ -345,7 +345,7 @@ class NeuralEncoder(nn.Module):
         self.checkpoint_activations = checkpoint_activations
 
     def forward(self, x: Tensor) -> Tensor:
-        # (batch_size, n_ee_channels, n_freqs, sequence_length) -> (batch_size, n_freqs, n_eeg_channels, sequence_length).
+        # (batch_size, n_eeg_channels, n_freqs, sequence_length) -> (batch_size, n_freqs, n_eeg_channels, sequence_length).
         # We want the convolutions to be performed separately on each eletrode channel.
         # The inputs to a convolution 2d are of the shape (N, C_in, H, W).
         B, N_C, N_F, T = x.size()
@@ -366,6 +366,7 @@ class NeuralEncoder(nn.Module):
         else:
             for block in self.blocks:
                 x = block(x=x)
+        x = self.ln_post(x)
         return x
 
     def optim_groups(self, weight_decay: float = 1e-1) -> list[dict[str, str]]:
