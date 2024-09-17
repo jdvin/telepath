@@ -48,6 +48,9 @@ class MultiHeadAttention(torch.nn.Module):
                 torch.triu(torch.ones(target_seq_len, source_seq_len)).bool(),
                 float("-inf"),
             )
+        print("source:", source_seq_len)
+        print("target:", target_seq_len)
+        print("bias:", bias.shape)
         self.register_buffer(
             "bias", bias.expand(1, self.n_heads, target_seq_len, source_seq_len)
         )
@@ -71,6 +74,10 @@ class MultiHeadAttention(torch.nn.Module):
             attention_mask: Tensor[float] (B, 1, T_q, T_kv)
         """
         if self.flash:
+            print("q:", q.shape)
+            print("k:", k.shape)
+            print("v:", v.shape)
+            print("mask:", attention_mask.shape)
             y = F.scaled_dot_product_attention(
                 q,
                 k,
@@ -123,9 +130,17 @@ class MultiHeadAttention(torch.nn.Module):
         q = self.split_heads(q, B, T_q, D)
         k = self.split_heads(k, B, T_kv, D)
         v = self.split_heads(v, B, T_kv, D)
-        bias = self.bias[:, :, :T_kv, T_cached:T_kv]
+        bias = self.bias[:, :, T_cached : T_cached + T_q, :T_kv]
+        if attention_mask is not None:
+            attention_mask = attention_mask[:, None, None, :].expand(
+                B, self.n_heads, T_kv, T_q
+            )
+
         y = self.qkv_attention(
-            q, k, v, bias if attention_mask is None else bias + attention_mask
+            q,
+            k,
+            v,
+            bias if attention_mask is None else bias + attention_mask,
         )
         # Flatten heads.
         y = y.transpose(1, 2).contiguous().view(B, T_q, D)

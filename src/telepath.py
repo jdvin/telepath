@@ -257,7 +257,7 @@ class RelativePositionResidualAttentionBlock(ResidualAttentionBlock):
         self.attn = RelativePositionMultiHeadAttention(
             n_heads=n_heads,
             d_model=d_model,
-            source_seq_len=source_seq_len,
+            source_seq_len=target_seq_len,
             target_seq_len=target_seq_len,
             q_bias=False,
             k_bias=False,
@@ -436,7 +436,8 @@ class TextDecoder(nn.Module):
     def __init__(
         self,
         n_vocab: int,
-        n_ctx: int,
+        encoder_n_ctx: int,
+        decoder_n_ctx: int,
         d_model: int,
         d_mlp: int,
         n_head: int,
@@ -448,8 +449,8 @@ class TextDecoder(nn.Module):
         self.embed_tokens = nn.Embedding(n_vocab, d_model)
         self.blocks = nn.ModuleList(
             RelativePositionResidualAttentionBlock(
-                n_ctx,
-                n_ctx,
+                encoder_n_ctx,
+                decoder_n_ctx,
                 d_model,
                 n_head,
                 d_mlp=d_mlp,
@@ -550,7 +551,8 @@ class TextDecoder(nn.Module):
 
         d_n = cls(
             n_vocab=config.decoder_vocab_size,
-            n_ctx=config.decoder_block_size,
+            encoder_n_ctx=config.encoder_block_size,
+            decoder_n_ctx=config.decoder_block_size,
             d_model=config.d_model,
             d_mlp=config.decoder_d_mlp,
             n_head=config.n_heads,
@@ -588,7 +590,8 @@ class Telepath(nn.Module):
 
         self.decoder = TextDecoder(
             n_vocab=config.decoder_vocab_size,
-            n_ctx=config.decoder_block_size,
+            encoder_n_ctx=config.encoder_block_size,
+            decoder_n_ctx=config.decoder_block_size,
             d_model=config.d_model,
             d_mlp=config.decoder_d_mlp,
             n_head=config.n_heads,
