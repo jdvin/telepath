@@ -72,17 +72,21 @@ def test_encoder():
 
 
 def test_decoder():
-    global resid
-    global ref_resid
+    global activations
+    global ref_activations
     inputs = torch.tensor([[0, 1], [0, 1], [0, 1]])
     # attention_mask = torch.ones_like(inputs)
-    resid = model.decoder(inputs, activations)  # , attention_mask)
+    resid = model.decoder(
+        inputs, activations, return_hidden_states=True
+    )  # , attention_mask)
     ref_resid = ref_decoder(
         input_ids=inputs,
         encoder_hidden_states=ref_activations.last_hidden_state,
         # encoder_attention_mask=attention_mask,
         output_hidden_states=True,
     )
+    print("out shape", resid.shape)
+    print("ref shape", ref_resid.last_hidden_state.shape)
     print(
         "post decoder rtol:",
         torch.max(get_rtol(resid, ref_resid.last_hidden_state)),

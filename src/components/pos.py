@@ -11,7 +11,7 @@ class RelativePositionBias(nn.Module):
         self.num_buckets = num_buckets
         self.max_distance = max_distance
         self.n_heads = n_heads
-        self.weight = nn.Parameter(torch.randn(self.num_buckets, self.n_heads))
+        self.relative_attention_bias = nn.Embedding(self.num_buckets, self.n_heads)
 
     @staticmethod
     def _relative_position_bucket(

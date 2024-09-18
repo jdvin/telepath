@@ -14,7 +14,6 @@ from .components.attention import MultiHeadAttention, RelativePositionMultiHeadA
 from .components.activations import GEGLU
 
 from transformers import (
-    AutoModel,
     AutoTokenizer,
     WhisperModel,
     WhisperConfig,
@@ -74,7 +73,7 @@ DECODER_PARAM_MAP = ParamMap(
         "k": "k_proj",
         "v": "v_proj",
         "o": "out_proj",
-        "relative_attention_bias": "rp_bias",
+        "relative_attention_bias": "rp_bias.relative_attention_bias",
         "0layer_norm": "attn_ln",
         "1EncDecAttention": "cross_attn",
         "1layer_norm": "cross_attn_ln",
@@ -473,6 +472,7 @@ class TextDecoder(nn.Module):
         attention_mask: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
         inference: bool = False,
+        return_hidden_states: bool = False,
     ) -> Tensor:
         offset = kv_cache[next(iter(kv_cache.keys()))].size(1) if kv_cache else 0
         x = self.embed_tokens(x[:, offset:])
@@ -486,8 +486,9 @@ class TextDecoder(nn.Module):
         x = self.ln_post(x)
         if inference:
             x = x[:, -1, :]
+        if return_hidden_states:
+            return x
         logits = x @ torch.transpose(self.embed_tokens.weight.to(x.dtype), 0, 1)
-
         return logits
 
     @torch.no_grad()

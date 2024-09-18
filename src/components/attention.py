@@ -46,11 +46,8 @@ class MultiHeadAttention(torch.nn.Module):
         if self.is_causal:
             bias = bias.masked_fill(
                 torch.triu(torch.ones(target_seq_len, source_seq_len)).bool(),
-                float("-inf"),
+                torch.finfo(bias.dtype).min,
             )
-        print("source:", source_seq_len)
-        print("target:", target_seq_len)
-        print("bias:", bias.shape)
         self.register_buffer(
             "bias", bias.expand(1, self.n_heads, target_seq_len, source_seq_len)
         )
@@ -74,10 +71,6 @@ class MultiHeadAttention(torch.nn.Module):
             attention_mask: Tensor[float] (B, 1, T_q, T_kv)
         """
         if self.flash:
-            print("q:", q.shape)
-            print("k:", k.shape)
-            print("v:", v.shape)
-            print("mask:", attention_mask.shape)
             y = F.scaled_dot_product_attention(
                 q,
                 k,
@@ -156,5 +149,4 @@ class RelativePositionMultiHeadAttention(MultiHeadAttention):
             self.source_seq_len == self.target_seq_len
         ), "Relative position MHA can only be used in self-attention!"
 
-    def __post_init__(self):
-        self.bias = self.bias + self.rp_bias(self.target_seq_len, self.source_seq_lenr)
+        self.bias = self.bias + self.rp_bias(self.target_seq_len, self.source_seq_len)
