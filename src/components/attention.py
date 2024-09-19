@@ -150,3 +150,9 @@ class RelativePositionMultiHeadAttention(MultiHeadAttention):
         ), "Relative position MHA can only be used in self-attention!"
 
         self.bias = self.bias + self.rp_bias(self.target_seq_len, self.source_seq_len)
+
+    def qkv_attention(
+        self, q: Tensor, k: Tensor, v: Tensor, attention_mask: Tensor
+    ) -> Tensor:
+        breakpoint()
+        return super().qkv_attention(q, k, v, attention_mask)
