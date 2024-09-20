@@ -10,6 +10,8 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 import yaml
 
+from src.components.norm import RMSNorm
+
 from .components.attention import MultiHeadAttention, RelativePositionMultiHeadAttention
 from .components.activations import GEGLU
 
@@ -266,9 +268,10 @@ class RelativePositionResidualAttentionBlock(ResidualAttentionBlock):
             dropout=0.1,
             is_causal=is_causal,
         )
+        self.attn_ln = RMSNorm(d_model)
 
-        self.cross_attn = (
-            MultiHeadAttention(
+        if cross_attn:
+            self.cross_attn = MultiHeadAttention(
                 n_heads,
                 d_model,
                 source_seq_len=source_seq_len,
@@ -279,9 +282,9 @@ class RelativePositionResidualAttentionBlock(ResidualAttentionBlock):
                 v_bias=False,
                 dropout=dropout,
             )
-            if cross_attn
-            else None
-        )
+
+            self.cross_attn_ln = RMSNorm(d_model)
+
         self.mlp = nn.Sequential(
             GEGLU(d_model, d_mlp),
             nn.Linear(d_mlp, d_model),

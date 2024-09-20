@@ -45,7 +45,9 @@ class MultiHeadAttention(torch.nn.Module):
         bias = torch.zeros(target_seq_len, source_seq_len)
         if self.is_causal:
             bias = bias.masked_fill(
-                torch.triu(torch.ones(target_seq_len, source_seq_len)).bool(),
+                torch.triu(
+                    torch.ones(target_seq_len, source_seq_len), diagonal=1
+                ).bool(),
                 torch.finfo(bias.dtype).min,
             )
         self.register_buffer(
@@ -151,8 +153,12 @@ class RelativePositionMultiHeadAttention(MultiHeadAttention):
 
         self.bias = self.bias + self.rp_bias(self.target_seq_len, self.source_seq_len)
 
-    def qkv_attention(
-        self, q: Tensor, k: Tensor, v: Tensor, attention_mask: Tensor
-    ) -> Tensor:
-        breakpoint()
-        return super().qkv_attention(q, k, v, attention_mask)
+    def forward(
+        self,
+        x: Tensor,
+        xc: Tensor | None = None,
+        kv_cache: dict[int, Tensor] | None = None,
+        attention_mask: Tensor | None = None,
+    ) -> tuple[Tensor]:
+        # breakpoint()
+        return super().forward(x, xc, kv_cache, attention_mask)

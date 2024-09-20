@@ -44,5 +44,4 @@ class RMSNorm(nn.Module):
         # Root Mean Square Layer Normalization https://arxiv.org/abs/1910.07467
         variance = x.float().pow(2).mean(-1, keepdim=True)
         x = x * torch.rsqrt(variance + self.eps)
-
         return self.weight * x.to(self.weight.dtype)

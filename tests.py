@@ -84,10 +84,7 @@ def test_decoder():
     resid = model.decoder(
         inputs, activations, return_hidden_states=True
     )  # , attention_mask)
-    ref_decoder.block[0].layer[
-        0
-    ].SelfAttention.relative_attention_bias.register_forward_pre_hook(debug_hook)
-
+    ref_decoder.block[0].layer[0].SelfAttention.register_forward_pre_hook(debug_hook)
     ref_resid = ref_decoder(
         input_ids=inputs,
         encoder_hidden_states=ref_activations.last_hidden_state,
