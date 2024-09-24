@@ -265,7 +265,7 @@ class RelativePositionResidualAttentionBlock(ResidualAttentionBlock):
             v_bias=False,
             out_bias=False,
             scale=1,
-            dropout=0.1,
+            dropout=dropout,
             is_causal=is_causal,
         )
         self.attn_ln = RMSNorm(d_model)
@@ -446,6 +446,7 @@ class TextDecoder(nn.Module):
         n_layer: int,
         checkpoint_activations: bool = False,
         scale_exponent: float = 0,
+        dropout: float = 0.1,
     ):
         super().__init__()
         self.embed_tokens = nn.Embedding(n_vocab, d_model)
@@ -459,6 +460,7 @@ class TextDecoder(nn.Module):
                 cross_attn=True,
                 scale_exponent=scale_exponent,
                 is_causal=True,
+                dropout=dropout,
             )
             for _ in range(n_layer)
         )
@@ -561,6 +563,7 @@ class TextDecoder(nn.Module):
             d_mlp=config.decoder_d_mlp,
             n_head=config.n_heads,
             n_layer=config.decoder_n_layers,
+            dropout=config.dropout,
         )
 
         new_keys = list(d_n.state_dict().keys())
@@ -600,6 +603,7 @@ class Telepath(nn.Module):
             d_mlp=config.decoder_d_mlp,
             n_head=config.n_heads,
             n_layer=config.decoder_n_layers,
+            dropout=config.dropout,
         )
 
         if not config.train_decoder:

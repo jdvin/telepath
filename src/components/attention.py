@@ -37,8 +37,8 @@ class MultiHeadAttention(torch.nn.Module):
         self.v_proj = nn.Linear(d_model, d_model, bias=v_bias)
         # Output projection.
         self.out_proj = nn.Linear(d_model, d_model, bias=out_bias)
-        self.attn_dropout = torch.nn.Dropout(dropout)
-        self.resid_dropout = torch.nn.Dropout(dropout)
+        self.attn_dropout = nn.Dropout(dropout)
+        self.resid_dropout = nn.Dropout(dropout)
         self.flash = flash
         self.source_seq_len = source_seq_len
         self.target_seq_len = target_seq_len
@@ -130,7 +130,6 @@ class MultiHeadAttention(torch.nn.Module):
             attention_mask = attention_mask[:, None, None, :].expand(
                 B, self.n_heads, T_kv, T_q
             )
-
         y = self.qkv_attention(
             q,
             k,
@@ -152,6 +151,7 @@ class RelativePositionMultiHeadAttention(MultiHeadAttention):
         ), "Relative position MHA can only be used in self-attention!"
 
         self.bias = self.bias + self.rp_bias(self.target_seq_len, self.source_seq_len)
+        assert self.attn_dropout.p == 0.0
 
     def forward(
         self,
