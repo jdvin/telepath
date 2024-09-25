@@ -81,10 +81,13 @@ def test_decoder():
     global ref_activations
     inputs = torch.tensor([[0, 1], [0, 1], [0, 1]])
     # attention_mask = torch.ones_like(inputs)
+
+    ref_decoder.block[0].layer[0].SelfAttention.register_forward_pre_hook(debug_hook)
+    model.decoder.blocks[0].attn.register_forward_pre_hook(debug_hook)
+
     activations = model.decoder(
         inputs, activations, return_hidden_states=True
     )  # , attention_mask)
-    # ref_decoder.block[0].layer[0].SelfAttention.register_forward_pre_hook(debug_hook)
     ref_activations = ref_decoder(
         input_ids=inputs,
         encoder_hidden_states=ref_activations.last_hidden_state,

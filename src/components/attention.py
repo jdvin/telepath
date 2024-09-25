@@ -150,15 +150,36 @@ class RelativePositionMultiHeadAttention(MultiHeadAttention):
             self.source_seq_len == self.target_seq_len
         ), "Relative position MHA can only be used in self-attention!"
 
-        self.bias = self.bias + self.rp_bias(self.target_seq_len, self.source_seq_len)
-        assert self.attn_dropout.p == 0.0
+    def __post_init__(self):
+        bias = torch.zeros(self.target_seq_len, self.source_seq_len)
+        if self.is_causal:
+            bias = bias.masked_fill(
+                torch.triu(
+                    torch.ones(self.target_seq_len, self.source_seq_len), diagonal=1
+                ).bool(),
+                torch.finfo(bias.dtype).min,
+            )
 
-    def forward(
+        self.bias = bias + self.rp_bias(self.target_seq_len, self.source_seq_len)
+
+    def _load_from_state_dict(
         self,
-        x: Tensor,
-        xc: Tensor | None = None,
-        kv_cache: dict[int, Tensor] | None = None,
-        attention_mask: Tensor | None = None,
-    ) -> tuple[Tensor]:
-        # breakpoint()
-        return super().forward(x, xc, kv_cache, attention_mask)
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        out = super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
+        self.__post_init__()
+        return out

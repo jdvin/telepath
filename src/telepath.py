@@ -703,7 +703,6 @@ class Telepath(nn.Module):
     @classmethod
     def from_pretrained(cls, config: TelepathConfig):
         """Initialize the model from pretrained Whisper."""
-
         model = cls(config)
         model.encoder = NeuralEncoder.from_pretrained(config)
         model.decoder = TextDecoder.from_pretrained(config)
