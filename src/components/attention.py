@@ -44,11 +44,12 @@ class MultiHeadAttention(torch.nn.Module):
         self.target_seq_len = target_seq_len
         bias = torch.zeros(target_seq_len, source_seq_len)
         if self.is_causal:
-            bias = bias.masked_fill(
-                torch.triu(
-                    torch.ones(target_seq_len, source_seq_len), diagonal=1
-                ).bool(),
-                torch.finfo(bias.dtype).min,
+            bias = torch.triu(
+                torch.full_like(
+                    bias,
+                    torch.finfo(bias.dtype).min,
+                ),
+                diagonal=1,
             )
         self.register_buffer(
             "bias", bias.expand(1, self.n_heads, target_seq_len, source_seq_len)
@@ -145,21 +146,20 @@ class MultiHeadAttention(torch.nn.Module):
 class RelativePositionMultiHeadAttention(MultiHeadAttention):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.rp_bias = RelativePositionBias(n_heads=self.n_heads)
+        self.rp_bias = RelativePositionBias(bidirectional=False, n_heads=self.n_heads)
         assert (
             self.source_seq_len == self.target_seq_len
         ), "Relative position MHA can only be used in self-attention!"
 
     def __post_init__(self):
-        bias = torch.zeros(self.target_seq_len, self.source_seq_len)
-        if self.is_causal:
-            bias = bias.masked_fill(
-                torch.triu(
-                    torch.ones(self.target_seq_len, self.source_seq_len), diagonal=1
-                ).bool(),
-                torch.finfo(bias.dtype).min,
-            )
-
+        bias = torch.zeros
+        bias = torch.triu(
+            torch.full(
+                (self.target_seq_len, self.source_seq_len),
+                torch.finfo(self.rp_bias.relative_attention_bias.weight.dtype).min,
+            ),
+            diagonal=1,
+        )
         self.bias = bias + self.rp_bias(self.target_seq_len, self.source_seq_len)
 
     def _load_from_state_dict(
@@ -181,5 +181,6 @@ class RelativePositionMultiHeadAttention(MultiHeadAttention):
             unexpected_keys,
             error_msgs,
         )
+        breakpoint()
         self.__post_init__()
         return out

@@ -69,11 +69,40 @@ def test_encoder():
     inputs = torch.rand(3, 1, 80, 3000)
     activations = model.encoder(inputs)
     ref_activations = ref_encoder(inputs.squeeze(1), output_hidden_states=True)
-    print(
-        "post encoder rtol:",
-        torch.max(get_rtol(activations, ref_activations.last_hidden_state)),
+    assert torch.equal(activations, ref_activations.last_hidden_state)
+
+
+def test_relative_position_bias():
+    ipt = torch.randn(
+        3, 10, model.config.d_model // model.config.n_heads, model.config.n_heads
     )
-    assert torch.allclose(activations, ref_activations.last_hidden_state, rtol=1e-3)
+    attn = model.decoder.blocks[0].attn
+    # breakpoint()
+    rp_bias = attn.rp_bias
+    bias_live = rp_bias(10, 10)
+    bias_static = attn.bias
+    ref_attn = ref_decoder.block[0].layer[0].SelfAttention
+    # breakpoint()
+    ref_bias = ref_attn.compute_bias(10, 10)
+    assert torch.equal(bias_live, ref_bias)
+    ref_bias = ref_bias + torch.triu(
+        torch.full_like(ref_bias, torch.finfo(ref_bias.dtype).min), diagonal=1
+    )
+    assert torch.equal(
+        ref_bias,
+        bias_static,
+    )
+
+
+def test_relative_position_attention():
+    global activations
+    global ref_activations
+    ipt = torch.randn(3, 10, model.config.d_model)
+    attention = model.decoder.blocks[0]
+    activations = attention(x=ipt, xc=activations)
+    ref_attention = ref_decoder.block[0].layer[0].SelfAttention
+    ref_activations = ref_attention(ipt, key_value_states=activations)
+    assert torch.equal(activations, ref_activations[0])
 
 
 def test_decoder():
@@ -82,8 +111,8 @@ def test_decoder():
     inputs = torch.tensor([[0, 1], [0, 1], [0, 1]])
     # attention_mask = torch.ones_like(inputs)
 
-    ref_decoder.block[0].layer[0].SelfAttention.register_forward_pre_hook(debug_hook)
-    model.decoder.blocks[0].attn.register_forward_pre_hook(debug_hook)
+    # ref_decoder.block[0].layer[0].SelfAttention.register_forward_pre_hook(debug_hook)
+    # model.decoder.blocks[0].attn.register_forward_pre_hook(debug_hook)
 
     activations = model.decoder(
         inputs, activations, return_hidden_states=True
