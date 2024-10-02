@@ -150,8 +150,10 @@ class RelativePositionMultiHeadAttention(MultiHeadAttention):
         assert (
             self.source_seq_len == self.target_seq_len
         ), "Relative position MHA can only be used in self-attention!"
+        self.compute_bias()
+        self.register_load_state_dict_post_hook(self._post_load_hook)
 
-    def __post_init__(self):
+    def compute_bias(self):
         bias = torch.zeros
         bias = torch.triu(
             torch.full(
@@ -162,25 +164,6 @@ class RelativePositionMultiHeadAttention(MultiHeadAttention):
         )
         self.bias = bias + self.rp_bias(self.target_seq_len, self.source_seq_len)
 
-    def _load_from_state_dict(
-        self,
-        state_dict,
-        prefix,
-        local_metadata,
-        strict,
-        missing_keys,
-        unexpected_keys,
-        error_msgs,
-    ):
-        out = super()._load_from_state_dict(
-            state_dict,
-            prefix,
-            local_metadata,
-            strict,
-            missing_keys,
-            unexpected_keys,
-            error_msgs,
-        )
-        breakpoint()
-        self.__post_init__()
-        return out
+    def _post_load_hook(self, module, incompatible_keys):
+        # This method will be called after the state dict is loaded
+        self.compute_bias()

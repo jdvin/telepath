@@ -52,6 +52,10 @@ def get_rtol(a, b):
     return torch.abs(a - b) / torch.abs(b)
 
 
+def get_causal_mask_for_bias(bias: torch.Tensor):
+    return torch.triu(torch.full_like(bias, torch.finfo(bias.dtype).min), diagonal=1)
+
+
 def test_position_in_cycle():
     for i in range(1, 21):
         if i < 11:
@@ -73,21 +77,16 @@ def test_encoder():
 
 
 def test_relative_position_bias():
-    ipt = torch.randn(
-        3, 10, model.config.d_model // model.config.n_heads, model.config.n_heads
-    )
     attn = model.decoder.blocks[0].attn
-    # breakpoint()
     rp_bias = attn.rp_bias
     bias_live = rp_bias(10, 10)
     bias_static = attn.bias
     ref_attn = ref_decoder.block[0].layer[0].SelfAttention
-    # breakpoint()
     ref_bias = ref_attn.compute_bias(10, 10)
+    # Test that the bias is calculated the same.
     assert torch.equal(bias_live, ref_bias)
-    ref_bias = ref_bias + torch.triu(
-        torch.full_like(ref_bias, torch.finfo(ref_bias.dtype).min), diagonal=1
-    )
+    ref_bias = ref_bias + get_causal_mask_for_bias(ref_bias)
+    # Test that the bias is recalculated correctly after loading weights.
     assert torch.equal(
         ref_bias,
         bias_static,
@@ -95,14 +94,32 @@ def test_relative_position_bias():
 
 
 def test_relative_position_attention():
+    ipt = torch.randn(3, 10, model.config.d_model)
+    attention = model.decoder.blocks[0].attn
+    out = attention(x=ipt.clone())
+    ref_attention = ref_decoder.block[0].layer[0].SelfAttention
+    ref_out = ref_attention(
+        ipt.clone(),
+        mask=get_causal_mask_for_bias(ref_attention.compute_bias(10, 10)),
+    )[0]
+    assert torch.equal(out, ref_out)
+
+
+def test_relative_decoder_block():
     global activations
     global ref_activations
     ipt = torch.randn(3, 10, model.config.d_model)
-    attention = model.decoder.blocks[0]
-    activations = attention(x=ipt, xc=activations)
-    ref_attention = ref_decoder.block[0].layer[0].SelfAttention
-    ref_activations = ref_attention(ipt, key_value_states=activations)
-    assert torch.equal(activations, ref_activations[0])
+    block = model.decoder.blocks[0]
+    activations = block(x=ipt.clone(), xc=activations)
+    ref_attention = ref_decoder.block[0]
+    ref_activations = ref_attention(
+        ipt.clone(),
+        encoder_hidden_states=ref_activations.last_hidden_state,
+        attention_mask=get_causal_mask_for_bias(
+            ref_attention.layer[0].SelfAttention.compute_bias(10, 10)
+        ),
+    )[0]
+    assert torch.equal(activations, ref_activations)
 
 
 def test_decoder():
@@ -119,7 +136,7 @@ def test_decoder():
     )  # , attention_mask)
     ref_activations = ref_decoder(
         input_ids=inputs,
-        encoder_hidden_states=ref_activations.last_hidden_state,
+        encoder_hidden_states=ref_activations,
         # encoder_attention_mask=attention_mask,
         output_hidden_states=True,
     )
