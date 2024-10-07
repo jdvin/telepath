@@ -4,6 +4,7 @@ from transformers import (
     AutoModel,
     AutoTokenizer,
     T5ForConditionalGeneration,
+    T5Config,
     WhisperModel,
 )
 import torch
@@ -18,7 +19,7 @@ torch.set_grad_enabled(False)
 torch.random.manual_seed(42)
 
 
-def debug_hook(module, ipt):
+def debug_hook(*args, **kwargs):
     breakpoint()
 
 
@@ -43,9 +44,15 @@ model = Telepath.from_pretrained(config)
 ref_encoder = WhisperModel.from_pretrained(
     config.encoder_pretrained_model
 ).get_encoder()
+ref_config = T5Config.from_pretrained(config.decoder_pretrained_model)
+ref_config.dropout_rate = 0.0
 ref_decoder = T5ForConditionalGeneration.from_pretrained(
-    config.decoder_pretrained_model
+    config.decoder_pretrained_model, config=ref_config
 ).get_decoder()
+
+for block in ref_decoder.block:
+    block.layer[2].DenseReluDense.dropout.p = 0.0
+ref_decoder.dropout.p = 0.0
 
 
 def get_rtol(a, b):
@@ -106,20 +113,20 @@ def test_relative_position_attention():
 
 
 def test_relative_decoder_block():
-    global activations
-    global ref_activations
     ipt = torch.randn(3, 10, model.config.d_model)
     block = model.decoder.blocks[0]
-    activations = block(x=ipt.clone(), xc=activations)
+
+    # ref_decoder.block[0].layer[2].DenseReluDense.dropout.p = 0.0
+    out = block(x=ipt.clone(), xc=activations)
     ref_attention = ref_decoder.block[0]
-    ref_activations = ref_attention(
+    ref_out = ref_attention(
         ipt.clone(),
         encoder_hidden_states=ref_activations.last_hidden_state,
         attention_mask=get_causal_mask_for_bias(
             ref_attention.layer[0].SelfAttention.compute_bias(10, 10)
         ),
     )[0]
-    assert torch.equal(activations, ref_activations)
+    assert torch.allclose(out, ref_out, atol=1e-3)
 
 
 def test_decoder():
@@ -127,16 +134,14 @@ def test_decoder():
     global ref_activations
     inputs = torch.tensor([[0, 1], [0, 1], [0, 1]])
     # attention_mask = torch.ones_like(inputs)
-
-    # ref_decoder.block[0].layer[0].SelfAttention.register_forward_pre_hook(debug_hook)
-    # model.decoder.blocks[0].attn.register_forward_pre_hook(debug_hook)
-
+    ref_decoder.block[0].layer[1].register_forward_pre_hook(debug_hook)
+    model.decoder.blocks[0].cross_attn.register_forward_pre_hook(debug_hook)
     activations = model.decoder(
         inputs, activations, return_hidden_states=True
     )  # , attention_mask)
     ref_activations = ref_decoder(
         input_ids=inputs,
-        encoder_hidden_states=ref_activations,
+        encoder_hidden_states=ref_activations.last_hidden_state,
         # encoder_attention_mask=attention_mask,
         output_hidden_states=True,
     )

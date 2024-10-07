@@ -1,5 +1,23 @@
-from torch import nn, Tensor
+import math
+from torch import nn, Tensor, tanh, pow
 from torch.nn import functional as F
+
+
+class NewGELUActivation(nn.Module):
+    """
+    Implementation of the GELU activation function currently in Google BERT repo (identical to OpenAI GPT). Also see
+    the Gaussian Error Linear Units paper: https://arxiv.org/abs/1606.08415
+    """
+
+    def forward(self, input: Tensor) -> Tensor:
+        return (
+            0.5
+            * input
+            * (
+                1.0
+                + tanh(math.sqrt(2.0 / math.pi) * (input + 0.044715 * pow(input, 3.0)))
+            )
+        )
 
 
 class GEGLU(nn.Module):
@@ -13,6 +31,7 @@ class GEGLU(nn.Module):
         super().__init__()
         self.W = nn.Linear(d_in, d_out, bias=bias)
         self.V = nn.Linear(d_in, d_out, bias=bias)
+        self.gelu = NewGELUActivation()
 
     def forward(self, x: Tensor) -> Tensor:
-        return F.gelu(self.W(x)) * self.V(x)
+        return self.gelu(self.W(x)) * self.V(x)

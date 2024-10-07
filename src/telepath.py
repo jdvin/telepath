@@ -280,15 +280,17 @@ class RelativePositionResidualAttentionBlock(ResidualAttentionBlock):
                 q_bias=False,
                 k_bias=False,
                 v_bias=False,
+                out_bias=False,
                 dropout=dropout,
             )
 
             self.cross_attn_ln = RMSNorm(d_model)
 
         self.mlp = nn.Sequential(
-            GEGLU(d_model, d_mlp),
-            nn.Linear(d_mlp, d_model),
+            GEGLU(d_model, d_mlp, bias=False),
+            nn.Linear(d_mlp, d_model, bias=False),
         )
+        self.mlp_ln = RMSNorm(d_model)
 
 
 class NeuralEncoder(nn.Module):
@@ -467,7 +469,7 @@ class TextDecoder(nn.Module):
         assert isinstance(self.blocks[0], ResidualAttentionBlock)
         assert isinstance(self.blocks[0].attn, MultiHeadAttention)
         assert isinstance(self.blocks[0].attn.k_proj, nn.Linear)
-        self.ln_post = nn.LayerNorm(d_model)
+        self.ln_post = RMSNorm(d_model)
         self.checkpoint_activations = checkpoint_activations
 
     def forward(
