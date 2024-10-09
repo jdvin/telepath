@@ -267,6 +267,7 @@ class RelativePositionResidualAttentionBlock(ResidualAttentionBlock):
             scale=1,
             dropout=dropout,
             is_causal=is_causal,
+            flash=False,
         )
         self.attn_ln = RMSNorm(d_model)
 
@@ -282,6 +283,7 @@ class RelativePositionResidualAttentionBlock(ResidualAttentionBlock):
                 v_bias=False,
                 out_bias=False,
                 dropout=dropout,
+                flash=False,
             )
 
             self.cross_attn_ln = RMSNorm(d_model)
@@ -576,6 +578,11 @@ class TextDecoder(nn.Module):
             assert new_key in new_keys, f"{new_key} not in {new_keys}."
 
             nw_sd[new_key] = param.clone()
+            if "rp_bias.relative_attention_bias" not in new_key:
+                continue
+            for i in range(1, len(d_n.blocks)):
+                new_key = new_key.replace(f".{i-1}.", f".{i}.")
+                nw_sd[new_key] = param.clone()
         d_n.load_state_dict(nw_sd)
         return d_n
 

@@ -133,9 +133,6 @@ def test_decoder():
     global activations
     global ref_activations
     inputs = torch.tensor([[0, 1], [0, 1], [0, 1]])
-    # attention_mask = torch.ones_like(inputs)
-    ref_decoder.block[0].layer[1].register_forward_pre_hook(debug_hook)
-    model.decoder.blocks[0].cross_attn.register_forward_pre_hook(debug_hook)
     activations = model.decoder(
         inputs, activations, return_hidden_states=True
     )  # , attention_mask)
@@ -145,13 +142,7 @@ def test_decoder():
         # encoder_attention_mask=attention_mask,
         output_hidden_states=True,
     )
-    print("out shape", activations.shape)
-    print("ref shape", ref_activations.last_hidden_state.shape)
-    print(
-        "post decoder rtol:",
-        torch.max(get_rtol(activations, ref_activations.last_hidden_state)),
-    )
-    assert torch.allclose(activations, ref_activations.last_hidden_state, rtol=1e-3)
+    assert torch.equal(activations, ref_activations.last_hidden_state)
 
 
 # # iteration = 0
