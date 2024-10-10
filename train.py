@@ -66,7 +66,6 @@ def main(
     reset_data_cache: bool,
     is_test_run: bool,
 ):
-    torch.cuda.memory._record_memory_history()
     cfg = TrainingConfig(
         **load_yaml(training_config_path),
         training_config_path=training_config_path,
@@ -107,9 +106,6 @@ def main(
     }[cfg.dtype]
 
     model.to(rank, dtype=torch_dtype)
-    reporter = MemReporter(model)
-    reporter.report()
-    torch.cuda.empty_cache()
     assert isinstance(model, Telepath)
     assert not isinstance(model.module.configure_optimizers, torch.Tensor)
     assert isinstance(model.module, nn.Module)
@@ -217,8 +213,6 @@ def main(
             metrics=metrics,
             device=rank,
         )
-
-    torch.cuda.memory._dump_snapshot("new_snapshot.pickle")
     while True:
         is_accumulating = metrics[
             "microstep"
