@@ -42,18 +42,17 @@ class MultiHeadAttention(torch.nn.Module):
         self.flash = flash
         self.source_seq_len = source_seq_len
         self.target_seq_len = target_seq_len
-        bias = torch.zeros(target_seq_len, source_seq_len)
+        # TODO: DOES NOT NEED TO BE ALLOCATED IF IT IS NOT BEING USED!
+        # THIS IS 75MB WASTED PER ENCODER LAYER!!!!
         if self.is_causal:
             bias = torch.triu(
-                torch.full_like(
-                    bias,
-                    torch.finfo(bias.dtype).min,
+                torch.full(
+                    (1, 1, target_seq_len, source_seq_len),
+                    torch.finfo(self.q_proj.weight.dtype).min,
                 ),
                 diagonal=1,
             )
-        self.register_buffer(
-            "bias", bias.expand(1, self.n_heads, target_seq_len, source_seq_len)
-        )
+            self.register_buffer("bias", bias)
 
     def split_heads(self, x: torch.Tensor, B: int, T: int, D: int) -> torch.Tensor:
         """Split matrices into heads and reshape to have heads as child ranks."""
@@ -64,7 +63,7 @@ class MultiHeadAttention(torch.nn.Module):
         q: Tensor,
         k: Tensor,
         v: Tensor,
-        attention_mask: Tensor,
+        attention_mask: Tensor | None,
     ) -> Tensor:
         """
         Args:
@@ -87,7 +86,7 @@ class MultiHeadAttention(torch.nn.Module):
             # (B, nhead, T_q, D_head) x (B, nhead, D_head, T_kv) -> (B, nhead, T_q, T_kv).
             qk = (q @ k.transpose(-2, -1)) * self.scale
             # Add attention bias (input masking, causal masking, relative pos, etc).
-            qk = qk + attention_mask
+            qk = qk + attention_mask if attention_mask is not None else qk
             attn = F.softmax(qk, dim=-1, dtype=torch.float32).type_as(qk)
             attn = self.attn_dropout(attn) if self.training else attn
             # (B, nhead, T, T) x (B, nhead, T, D_head) -> (B, nhead, T, D_head).
@@ -126,16 +125,22 @@ class MultiHeadAttention(torch.nn.Module):
         q = self.split_heads(q, B, T_q, D)
         k = self.split_heads(k, B, T_kv, D)
         v = self.split_heads(v, B, T_kv, D)
-        bias = self.bias[:, :, T_cached : T_cached + T_q, :T_kv]
+        bias = (
+            self.bias[:, :, T_cached : T_cached + T_q, :T_kv]
+            if self.is_causal
+            else None
+        )
         if attention_mask is not None:
             attention_mask = attention_mask[:, None, None, :].expand(
                 B, self.n_heads, T_kv, T_q
             )
+            if bias is not None:
+                attention_mask = attention_mask + bias
         y = self.qkv_attention(
             q,
             k,
             v,
-            bias if attention_mask is None else bias + attention_mask,
+            bias if attention_mask is None else attention_mask,
         )
         # Flatten heads.
         y = y.transpose(1, 2).contiguous().view(B, T_q, D)
@@ -150,19 +155,24 @@ class RelativePositionMultiHeadAttention(MultiHeadAttention):
         assert (
             self.source_seq_len == self.target_seq_len
         ), "Relative position MHA can only be used in self-attention!"
+        if not self.is_causal:
+            raise NotImplementedError(
+                "This implementation won't work with non-causal attention."
+            )
         self.compute_bias()
         self.register_load_state_dict_post_hook(self._post_load_hook)
 
     def compute_bias(self):
-        bias = torch.zeros
-        bias = torch.triu(
-            torch.full(
-                (self.target_seq_len, self.source_seq_len),
-                torch.finfo(self.rp_bias.relative_attention_bias.weight.dtype).min,
-            ),
-            diagonal=1,
-        )
-        self.bias = bias + self.rp_bias(self.target_seq_len, self.source_seq_len)
+        bias = self.rp_bias(self.target_seq_len, self.source_seq_len)
+        if self.is_causal:
+            bias = bias + torch.triu(
+                torch.full(
+                    (1, 1, self.target_seq_len, self.source_seq_len),
+                    torch.finfo(self.rp_bias.relative_attention_bias.weight.dtype).min,
+                ),
+                diagonal=1,
+            )
+        self.bias = bias
 
     def _post_load_hook(self, module, incompatible_keys):
         # This method will be called after the state dict is loaded

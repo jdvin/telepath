@@ -113,7 +113,7 @@ class TelepathConfig:
     decoder_n_layers: int = 0
     dropout: float = 0.1
     encoder_scale_exponent: float = -0.25
-    train_decoder: bool = True
+    train_decoder: bool = False
 
     @classmethod
     def from_yaml(cls, path: str):
@@ -329,8 +329,11 @@ class NeuralEncoder(nn.Module):
             padding=1,
             groups=n_channels,
         )
-        self.embed_positions = nn.Embedding(block_size, d_model)
-        self.embed_positions.weight = nn.Parameter(sinusoids(block_size, d_model))
+        channel_block_size = block_size // n_channels
+        self.embed_positions = nn.Embedding(channel_block_size, d_model)
+        self.embed_positions.weight = nn.Parameter(
+            sinusoids(channel_block_size, d_model)
+        )
         self.embed_electrodes = nn.Embedding(n_channels, d_model)
 
         self.blocks = nn.ModuleList(
@@ -468,9 +471,6 @@ class TextDecoder(nn.Module):
             )
             for _ in range(n_layer)
         )
-        assert isinstance(self.blocks[0], ResidualAttentionBlock)
-        assert isinstance(self.blocks[0].attn, MultiHeadAttention)
-        assert isinstance(self.blocks[0].attn.k_proj, nn.Linear)
         self.ln_post = RMSNorm(d_model)
         self.checkpoint_activations = checkpoint_activations
 

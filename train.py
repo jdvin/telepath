@@ -14,6 +14,8 @@ from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm import tqdm
 import wandb
 from utils.data_utils import extract_things_100ms_ds, get_collate_fn
+from pytorch_memlab import MemReporter
+
 
 from utils.train_utils import (
     run_eval,
@@ -64,6 +66,7 @@ def main(
     reset_data_cache: bool,
     is_test_run: bool,
 ):
+    torch.cuda.memory._record_memory_history()
     cfg = TrainingConfig(
         **load_yaml(training_config_path),
         training_config_path=training_config_path,
@@ -102,7 +105,11 @@ def main(
         "fp16": torch.float16,
         "bf16": torch.bfloat16,
     }[cfg.dtype]
+
     model.to(rank, dtype=torch_dtype)
+    reporter = MemReporter(model)
+    reporter.report()
+    torch.cuda.empty_cache()
     assert isinstance(model, Telepath)
     assert not isinstance(model.module.configure_optimizers, torch.Tensor)
     assert isinstance(model.module, nn.Module)
@@ -211,6 +218,7 @@ def main(
             device=rank,
         )
 
+    torch.cuda.memory._dump_snapshot("new_snapshot.pickle")
     while True:
         is_accumulating = metrics[
             "microstep"
@@ -235,7 +243,7 @@ def main(
                 micro_batch = get_microbatch(train_dataloader_iterator, rank)
             scaler.scale(loss).backward()  # type: ignore
 
-        # torch.cuda.memory._dump_snapshot("my_snapshot_checkpointed.pickle")
+        # torch.cuda.memory._dump_snapshot("new_snapshot.pickle")
         # break
         # If we are still accumulating gradients then skip gradient application and logging.
         if is_accumulating:
