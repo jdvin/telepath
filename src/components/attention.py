@@ -42,8 +42,6 @@ class MultiHeadAttention(torch.nn.Module):
         self.flash = flash
         self.source_seq_len = source_seq_len
         self.target_seq_len = target_seq_len
-        # TODO: DOES NOT NEED TO BE ALLOCATED IF IT IS NOT BEING USED!
-        # THIS IS 75MB WASTED PER ENCODER LAYER!!!!
         if self.is_causal:
             bias = torch.triu(
                 torch.full(
