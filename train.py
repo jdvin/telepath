@@ -14,7 +14,8 @@ from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm import tqdm
 import wandb
 from utils.data_utils import extract_things_100ms_ds, get_collate_fn
-from pytorch_memlab import MemReporter
+
+# from pytorch_memlab import MemReporter
 
 
 from utils.train_utils import (
@@ -130,12 +131,12 @@ def main(
                 root_dir=cfg.dataset_path, subjects=cfg.subjects
             )
     collate_fn = get_collate_fn(
-        model.tokenizer,
-        model.start_sequence,
-        model.stop_token,
-        model.stop_token,
+        model.module.tokenizer,
+        model.module.start_sequence,
+        model.module.stop_token,
+        model.module.stop_token,
         model_config.n_freqs * 2,
-        model.config.fft_hop_length,
+        model_config.fft_hop_length,
     )
     logger.info("Creating data loaders.")
     # Create data loaders.
@@ -232,10 +233,9 @@ def main(
             metrics["train_loss"].update(loss.item())
             # Get the next batch straight away without blocking whilst we compute the backward pass,
             # unless we are at the end of the epoch.
-
             if metrics["epochmicrostep"].value < len(train_dataloader) - 1:
                 micro_batch = get_microbatch(train_dataloader_iterator, rank)
-            scaler.scale(loss).backward()  # type: ignore
+            scaler.scale(loss).backward(retain_graph=True)  # type: ignore
 
         # torch.cuda.memory._dump_snapshot("new_snapshot.pickle")
         # break
@@ -321,9 +321,9 @@ if __name__ == "__main__":
                 args.run_name,
                 args.eval_first,
                 args.device,
-                args.dtype,
                 args.checkpoints,
                 args.reset_data_cache,
+                args.is_test_run,
             ),
             nprocs=args.world_size,
             join=True,

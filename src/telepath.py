@@ -652,7 +652,7 @@ class Telepath(nn.Module):
         stop_token_indices = (loss_mask == 1).to(torch.long).argmax(dim=1)
         batch_indices = torch.arange(loss_mask.shape[0])
         loss_mask[batch_indices, stop_token_indices] = 0
-        loss_mask[batch_indices, self.start_sequence :] = 1
+        loss_mask[batch_indices, : len(self.start_sequence)] = 1
         labels = token_ids.clone()
         labels[loss_mask] = -100
         # Shift and flatten labels (B x T) to 1D tensor (B T-1).

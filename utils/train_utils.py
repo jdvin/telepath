@@ -6,7 +6,6 @@ import os
 import random
 
 from loguru import logger
-import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Sampler, DistributedSampler
 from tqdm import tqdm
@@ -76,9 +75,11 @@ def get_microbatch(
 ) -> dict[str, torch.Tensor]:
     micro_batch = next(dataloader_iterator)
     return {
-        k: v.pin_memory().to(device=device, non_blocking=True)
-        if isinstance(device, int)
-        else v.to(device=device)
+        k: (
+            v.pin_memory().to(device=device, non_blocking=True)
+            if isinstance(device, int)
+            else v.to(device=device)
+        )
         for k, v in micro_batch.items()
         if isinstance(v, torch.Tensor)
     }

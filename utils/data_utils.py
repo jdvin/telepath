@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import torch
 from torch import Tensor
-from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
 from tqdm import tqdm
 
@@ -145,11 +144,14 @@ def extract_things_100ms_ds(
         os.path.exists(training_file_path) and os.path.exists(test_file_path)
     ) and not reset_cache
     logger.info(f"Using cached dataset: {cached}.")
-    split_shape = lambda epochs_per_session: (
-        len(subjects) * sessions_per_subject * epochs_per_session,
-        len(ELECTRODE_ORDER) + 1,  # +1 for the stimulus channel.
-        epoch_end - epoch_start,
-    )
+
+    def split_shape(epochs_per_session: int) -> tuple[int, int, int]:
+        return (
+            len(subjects) * sessions_per_subject * epochs_per_session,
+            len(ELECTRODE_ORDER) + 1,  # +1 for the stimulus channel.
+            epoch_end - epoch_start,
+        )
+
     train_split_shape = split_shape(session_epochs["train"])
     test_split_shape = split_shape(session_epochs["test"])
     ds = {
