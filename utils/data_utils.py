@@ -261,15 +261,17 @@ def get_collate_fn(
     start_token_id_sequence: Tensor,
     stop_token_id: int,
     pad_token_id: int,
-    get_spectrogram,
-    n_fft: int,
-    fft_hop_length: int,
+    get_spectrogram: bool,
+    n_fft: int | None = None,
+    fft_hop_length: int | None = None,
     things_concepts_path: str = "data/things_concepts.csv",
 ) -> Callable[[list[np.memmap]], dict[str, torch.Tensor]]:
     # Load the map from object ID to word.
     things_concepts = pd.read_csv(things_concepts_path)
     tokenizer.pad_token_id = pad_token_id
     stop_token = tokenizer.decode([stop_token_id])
+    if get_spectrogram:
+        assert n_fft is not None and fft_hop_length is not None
 
     # Define transformation function with parameters.
     def collate_fn(
@@ -285,7 +287,7 @@ def get_collate_fn(
             eeg_features.append(
                 get_spectrogram(torch.tensor(sample[1:, :]), n_fft, fft_hop_length)
                 if get_spectrogram
-                else sample[1:, :]
+                else torch.tensor(sample[1:, :])
             )
         # We are doing all of the special tokens manually because (1) We do not trust HF, and (2) we have more control.
         # Here we add the stop token manually because it will then be included in the _attended to_ region of the attenton mask.

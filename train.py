@@ -135,8 +135,7 @@ def main(
         model.module.start_sequence,
         model.module.stop_token,
         model.module.stop_token,
-        model_config.n_freqs * 2,
-        model_config.fft_hop_length,
+        get_spectrogram=False,
     )
     logger.info("Creating data loaders.")
     # Create data loaders.

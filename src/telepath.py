@@ -310,11 +310,8 @@ class NeuralEncoder(nn.Module):
     ):
         super().__init__()
 
-        channel_block_size = block_size // n_channels
-        self.embed_positions = nn.Embedding(channel_block_size, d_model)
-        self.embed_positions.weight = nn.Parameter(
-            sinusoids(channel_block_size, d_model)
-        )
+        self.embed_positions = nn.Embedding(block_size, d_model)
+        self.embed_positions.weight = nn.Parameter(sinusoids(block_size, d_model))
         self.sample_proj = nn.Linear(n_channels, d_model)
 
         self.blocks = nn.ModuleList(
@@ -559,7 +556,6 @@ class Telepath(nn.Module):
 
         self.encoder = NeuralEncoder(
             n_channels=config.n_eeg_channels,
-            n_freqs=config.n_freqs,
             block_size=config.encoder_block_size,
             d_model=config.d_model,
             d_mlp=config.encoder_d_mlp,
