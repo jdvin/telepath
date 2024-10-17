@@ -299,7 +299,6 @@ class NeuralEncoder(nn.Module):
     def __init__(
         self,
         n_channels: int,
-        n_freqs: int,
         block_size: int,
         d_model: int,
         d_mlp: int,
@@ -311,30 +310,12 @@ class NeuralEncoder(nn.Module):
     ):
         super().__init__()
 
-        # We want the convolutions to be performed separately on each eletrode channel.
-        # The channels will be stacked across the height dimension.
-        self.conv1 = nn.Conv1d(
-            in_channels=n_freqs * n_channels,
-            out_channels=d_model * n_channels,
-            kernel_size=3,
-            stride=1,
-            padding=1,
-            groups=n_channels,
-        )
-        self.conv2 = nn.Conv1d(
-            in_channels=d_model * n_channels,
-            out_channels=d_model * n_channels,
-            kernel_size=3,
-            stride=2,
-            padding=1,
-            groups=n_channels,
-        )
         channel_block_size = block_size // n_channels
         self.embed_positions = nn.Embedding(channel_block_size, d_model)
         self.embed_positions.weight = nn.Parameter(
             sinusoids(channel_block_size, d_model)
         )
-        self.embed_electrodes = nn.Embedding(n_channels, d_model)
+        self.sample_proj = nn.Linear(n_channels, d_model)
 
         self.blocks = nn.ModuleList(
             ResidualAttentionBlock(
@@ -354,20 +335,10 @@ class NeuralEncoder(nn.Module):
         self.checkpoint_activations = checkpoint_activations
 
     def forward(self, x: Tensor) -> Tensor:
-        # (batch_size, n_eeg_channels, n_freqs, sequence_length) -> (batch_size, n_freqs, n_eeg_channels, sequence_length).
-        # We want the convolutions to be performed separately on each eletrode channel.
-        # The inputs to a convolution 2d are of the shape (N, C_in, H, W).
-        B, N_C, N_F, T = x.size()
-        x = x.reshape(B, N_C * N_F, T)
-        x = F.gelu(self.conv1(x))
-        x = F.gelu(self.conv2(x))
-        x = x.reshape(B, N_C, self.d_model, T // 2)
-        # -> (batch_size, sequence_length, n_eeg_channels, d_model).
-        x = x.permute(0, 3, 1, 2)
-        x = (x + self.embed_positions.weight[None, :, None, :]).to(x.dtype)
-        x = (x + self.embed_electrodes.weight[None, None, ...]).to(x.dtype)
-        # Stack the electrode embeddings across the time dimension.
-        x = x.reshape(B, N_C * (T // 2), self.d_model)
+        # (batch_size, n_eeg_channels, sequence_length)
+        B, N_C, T = x.size()
+        x = self.sample_proj(x.transpose(-1, -2))
+        x = (x + self.embed_positions.weight[None, :, :]).to(x.dtype)
         if self.checkpoint_activations:
             x = checkpoint_sequential(
                 self.blocks, len(self.blocks), x, use_reentrant=False
@@ -408,7 +379,6 @@ class NeuralEncoder(nn.Module):
 
         e_n = cls(
             n_channels=config.n_eeg_channels,
-            n_freqs=config.n_freqs,
             block_size=config.encoder_block_size,
             d_model=config.d_model,
             d_mlp=config.encoder_d_mlp,
@@ -425,13 +395,8 @@ class NeuralEncoder(nn.Module):
             param: Tensor
             new_key = ENCODER_PARAM_MAP.map_param(key)
             assert new_key in new_keys, f"{new_key} not in {new_keys}."
-            if "conv" in key and "weight" in key:
-                # Reshape the Whisper 1D conv weights to our 2D grouped conv weights
-                out_channels, in_channels, kernel_size = param.shape
-                param = param.unsqueeze(1).repeat(1, config.n_eeg_channels, 1, 1)
-                param = param.reshape(
-                    out_channels * config.n_eeg_channels, in_channels, kernel_size
-                )
+            if "conv" in key:
+                continue
 
             if key == "encoder.embed_positions.weight":
                 param = param[: config.encoder_block_size, :]
