@@ -6,8 +6,15 @@ In short, my thought process is the following:
 - Surely transcribing audio is a much more closely matched task?
 
 TODO:
-[] val batch size
-[] Separate conv for every electrode
-    [] can then have avg conv weight norm for each electrode as a metric
-[] multipe epochs
+[] Modify RPA to work with non-causal attention. \
+[] Implement T5 encoder. \
+[] SLINP-Telepath \
+    [] simese model definition \
+        - if we just use THINGS then we can pre-compute the text embeddings
+    [] SigLIP Loss fn \
+    [] microbatch data swapping algorithm \
+        - mbs are n_mb neu-text pairs \
+        - texts are swapped between devices \
+            - can just be indexes into the precomputed text emb matrix \
+
 [] figure out what is going on with the generation tables?
