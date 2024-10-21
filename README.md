@@ -8,6 +8,10 @@ In short, my thought process is the following:
 TODO:
 [] Modify RPA to work with non-causal attention. \
 [] Implement T5 encoder. \
+[] Implement neural encoder from first principles \
+    - Keep linear proj \
+    - Use RMS norm \
+    - shift (but not scale) to t=0 before projection \
 [] SLINP-Telepath \
     [] simese model definition \
         - if we just use THINGS then we can pre-compute the text embeddings
@@ -16,5 +20,7 @@ TODO:
         - mbs are n_mb neu-text pairs \
         - texts are swapped between devices \
             - can just be indexes into the precomputed text emb matrix \
+[] new val metrics \
+    - accuracy @ n 
 
 [] figure out what is going on with the generation tables?
