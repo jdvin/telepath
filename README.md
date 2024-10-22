@@ -7,6 +7,8 @@ In short, my thought process is the following:
 
 TODO:
 [] Modify RPA to work with non-causal attention. \
+    - make mod
+    - make test
 [] Implement T5 encoder. \
 [] Implement neural encoder from first principles \
     - Keep linear proj \

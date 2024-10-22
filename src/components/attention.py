@@ -125,7 +125,7 @@ class MultiHeadAttention(torch.nn.Module):
         v = self.split_heads(v, B, T_kv, D)
         bias = (
             self.bias[:, :, T_cached : T_cached + T_q, :T_kv]
-            if self.is_causal
+            if hasattr(self, "bias")
             else None
         )
         if attention_mask is not None:
@@ -153,14 +153,11 @@ class RelativePositionMultiHeadAttention(MultiHeadAttention):
         assert (
             self.source_seq_len == self.target_seq_len
         ), "Relative position MHA can only be used in self-attention!"
-        if not self.is_causal:
-            raise NotImplementedError(
-                "This implementation won't work with non-causal attention."
-            )
-        self.compute_bias()
-        self.register_load_state_dict_post_hook(self._post_load_hook)
 
-    def compute_bias(self):
+        self.compute_bias()
+        self.register_load_state_dict_post_hook(self.compute_bias)
+
+    def compute_bias(self, *args, **kwargs):
         bias = self.rp_bias(self.target_seq_len, self.source_seq_len)
         if self.is_causal:
             bias = bias + torch.triu(
@@ -170,8 +167,4 @@ class RelativePositionMultiHeadAttention(MultiHeadAttention):
                 ),
                 diagonal=1,
             )
-        self.bias = bias
-
-    def _post_load_hook(self, module, incompatible_keys):
-        # This method will be called after the state dict is loaded
-        self.compute_bias()
+        self.register_buffer("bias", bias)
