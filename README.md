@@ -6,10 +6,9 @@ In short, my thought process is the following:
 - Surely transcribing audio is a much more closely matched task?
 
 TODO:
-[] Modify RPA to work with non-causal attention. \
-    - make mod
-    - make test
-[] Implement T5 encoder. \
+[x] Modify RPA to work with non-causal attention. \
+[x] Implement T5 encoder. \
+[] Make test
 [] Implement neural encoder from first principles \
     - Keep linear proj \
     - Use RMS norm \

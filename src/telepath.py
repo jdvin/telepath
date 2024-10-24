@@ -49,7 +49,7 @@ class ParamMap:
         return ".".join(out_pns)
 
 
-ENCODER_PARAM_MAP = ParamMap(
+WHISPER_PARAM_MAP = ParamMap(
     {
         "encoder": "",
         "layers": "blocks",
@@ -65,7 +65,7 @@ ENCODER_PARAM_MAP = ParamMap(
     set(),
 )
 
-DECODER_PARAM_MAP = ParamMap(
+T5_PARAM_MAP = ParamMap(
     {
         "decoder": "",
         "block": "blocks",
@@ -84,7 +84,6 @@ DECODER_PARAM_MAP = ParamMap(
         "wi_0": "0.W",
         "wi_1": "0.V",
         "wo": "1",
-        "2layer_norm": "mlp_ln",
         "final_layer_norm": "ln_post",
     },
     {3},
@@ -94,58 +93,32 @@ DECODER_PARAM_MAP = ParamMap(
 @dataclass
 class TelepathConfig:
     n_eeg_channels: int
-    encoder_pretrained_model: str | None
-    decoder_pretrained_model: str | None
-    decoder_start_sequence: Tensor = tensor([1484, 9709, 7314, 10])
-    decoder_stop_token: int = 0
-    decoder_vocab_size: int = 0
-    encoder_block_size: int = 0
-    decoder_block_size: int = 0
-    n_freqs: int = 0
-    fft_hop_length: int = 0
+    text_encoder_pretrained_model: str | None
+    text_encoder_start_sequence: Tensor = tensor([1484, 9709, 7314, 10])
+    text_encoder_stop_token: int = 0
+    text_encoder_vocab_size: int = 0
+    neural_encoder_block_size: int = 0
+    text_encoder_block_size: int = 0
+    neural_encoder_spectrogram: bool = False
+    n_freqs: int | None = None
+    fft_hop_length: int | None = None
     d_model: int = 0
-    encoder_d_mlp: int = 0
-    encoder_activation: str = ""
-    decoder_d_mlp: int = 0
-    decoder_activation: str = ""
+    neural_encoder_d_mlp: int = 0
+    neural_encoder_activation: str = ""
+    text_encoder_d_mlp: int = 0
+    text_encoder_activation: str = ""
     n_heads: int = 0
-    encoder_n_layers: int = 0
-    decoder_n_layers: int = 0
+    neural_encoder_n_layers: int = 0
+    text_encoder_n_layers: int = 0
     dropout: float = 0.1
-    encoder_scale_exponent: float = -0.25
-    train_decoder: bool = False
+    neural_encoder_scale_exponent: float = -0.25
+    train_text_encoder: bool = False
 
     @classmethod
     def from_yaml(cls, path: str):
         with open(path, "r") as f:
             config = yaml.safe_load(f)
         return cls(**config)
-
-    def __post_init__(self):
-        """There is definitely a better way."""
-        if self.encoder_pretrained_model:
-            encoder_config = WhisperConfig.from_pretrained(
-                self.encoder_pretrained_model
-            )
-            # TODO:
-            # We want to the channel dimension of the spectrogram to align with the channel dimension of the whisper feature extractor.
-            # It is an open question whether or not doing a straight exrtraction of the N equidistant frequencies is the best approach,
-            # or whether we should instead construct a neural equivalent of the mel scale.
-            self.n_freqs = encoder_config.num_mel_bins
-            self.d_model = encoder_config.d_model
-            self.encoder_d_mlp = encoder_config.encoder_ffn_dim
-            self.n_heads = encoder_config.encoder_attention_heads
-            self.encoder_n_layers = encoder_config.encoder_layers
-
-        if self.decoder_pretrained_model:
-            decoder_config = T5Config.from_pretrained(self.decoder_pretrained_model)
-            assert decoder_config.d_model == self.d_model
-            tokenizer = AutoTokenizer.from_pretrained(self.decoder_pretrained_model)
-            self.decoder_vocab_size = decoder_config.vocab_size
-            self.decoder_n_layers = decoder_config.num_decoder_layers
-            assert isinstance(tokenizer.eos_token_id, int)
-            self.decoder_d_mlp = decoder_config.d_ff
-            self.decoder_stop_token = tokenizer.eos_token_id
 
 
 def sinusoids(length: int, channels: int, max_timescale: int = 1000):
@@ -403,16 +376,18 @@ class NeuralEncoder(nn.Module):
         return e_n
 
 
-class TextDecoder(nn.Module):
+class RelativePositionTransformer(nn.Module):
     def __init__(
         self,
         n_vocab: int,
-        encoder_n_ctx: int,
-        decoder_n_ctx: int,
+        source_n_ctx: int,
+        target_n_ctx: int,
         d_model: int,
         d_mlp: int,
         n_head: int,
         n_layer: int,
+        cross_attn: bool,
+        is_causal: bool,
         checkpoint_activations: bool = False,
         scale_exponent: float = 0,
         dropout: float = 0.1,
@@ -421,14 +396,14 @@ class TextDecoder(nn.Module):
         self.embed_tokens = nn.Embedding(n_vocab, d_model)
         self.blocks = nn.ModuleList(
             RelativePositionResidualAttentionBlock(
-                encoder_n_ctx,
-                decoder_n_ctx,
+                source_n_ctx,
+                target_n_ctx,
                 d_model,
                 n_head,
                 d_mlp=d_mlp,
-                cross_attn=True,
+                cross_attn=cross_attn,
                 scale_exponent=scale_exponent,
-                is_causal=True,
+                is_causal=is_causal,
                 dropout=dropout,
             )
             for _ in range(n_layer)
@@ -439,11 +414,11 @@ class TextDecoder(nn.Module):
     def forward(
         self,
         x: Tensor,
+        return_hidden_states: bool,
         xc: Tensor | None = None,
         attention_mask: Tensor | None = None,
         kv_cache: dict[int, Tensor] | None = None,
         inference: bool = False,
-        return_hidden_states: bool = False,
     ) -> Tensor:
         offset = kv_cache[next(iter(kv_cache.keys()))].size(1) if kv_cache else 0
         x = self.embed_tokens(x[:, offset:])
@@ -462,13 +437,135 @@ class TextDecoder(nn.Module):
         logits = x @ torch.transpose(self.embed_tokens.weight.to(x.dtype), 0, 1)
         return logits
 
+    @classmethod
+    def from_pretrained(cls, config: TelepathConfig, cross_attn: bool, is_causal: bool):
+        d_pt = T5ForConditionalGeneration.from_pretrained(
+            config.decoder_pretrained_model
+        )
+        assert isinstance(d_pt, T5ForConditionalGeneration), type(d_pt)
+
+        d_n = cls(
+            n_vocab=config.decoder_vocab_size,
+            source_n_ctx=config.encoder_block_size,
+            target_n_ctx=config.decoder_block_size,
+            d_model=config.d_model,
+            d_mlp=config.decoder_d_mlp,
+            n_head=config.n_heads,
+            n_layer=config.decoder_n_layers,
+            dropout=config.dropout,
+            cross_attn=cross_attn,
+            is_causal=is_causal,
+        )
+
+        new_keys = list(d_n.state_dict().keys())
+        nw_sd = d_n.state_dict()
+        for key, param in d_pt.get_decoder().state_dict().items():
+            param: Tensor
+            new_key = T5_PARAM_MAP.map_param(key)
+            assert new_key in new_keys, f"{new_key} not in {new_keys}."
+
+            nw_sd[new_key] = param.clone()
+            if "rp_bias.relative_attention_bias" not in new_key:
+                continue
+            for i in range(1, len(d_n.blocks)):
+                new_key = new_key.replace(f".{i-1}.", f".{i}.")
+                nw_sd[new_key] = param.clone()
+        d_n.load_state_dict(nw_sd)
+        return d_n
+
+
+class TextEncoder(RelativePositionTransformer):
+    def __init__(
+        self,
+        n_vocab: int,
+        source_n_ctx: int,
+        target_n_ctx: int,
+        d_model: int,
+        d_mlp: int,
+        n_head: int,
+        n_layer: int,
+        checkpoint_activations: bool = False,
+        scale_exponent: float = 0,
+        dropout: float = 0.1,
+    ):
+        super().__init__(
+            n_vocab=n_vocab,
+            source_n_ctx=source_n_ctx,
+            target_n_ctx=target_n_ctx,
+            d_model=d_model,
+            d_mlp=d_mlp,
+            n_head=n_head,
+            n_layer=n_layer,
+            checkpoint_activations=checkpoint_activations,
+            scale_exponent=scale_exponent,
+            dropout=dropout,
+            cross_attn=False,
+            is_causal=False,
+        )
+
+    def forward(
+        self,
+        x: Tensor,
+        return_hidden_states: bool = True,
+        xc: Tensor | None = None,
+        attention_mask: Tensor | None = None,
+        kv_cache: dict[int, Tensor] | None = None,
+        inference: bool = False,
+    ) -> Tensor:
+        return super().forward(
+            x, return_hidden_states, xc, attention_mask, kv_cache, inference
+        )
+
+
+class TextDecoder(RelativePositionTransformer):
+    def __init__(
+        self,
+        n_vocab: int,
+        source_n_ctx: int,
+        target_n_ctx: int,
+        d_model: int,
+        d_mlp: int,
+        n_head: int,
+        n_layer: int,
+        checkpoint_activations: bool = False,
+        scale_exponent: float = 0,
+        dropout: float = 0.1,
+    ):
+        super().__init__(
+            n_vocab=n_vocab,
+            source_n_ctx=source_n_ctx,
+            target_n_ctx=target_n_ctx,
+            d_model=d_model,
+            d_mlp=d_mlp,
+            n_head=n_head,
+            n_layer=n_layer,
+            checkpoint_activations=checkpoint_activations,
+            scale_exponent=scale_exponent,
+            dropout=dropout,
+            cross_attn=True,
+            is_causal=True,
+        )
+
+    def forward(
+        self,
+        x: Tensor,
+        return_hidden_states: bool = False,
+        xc: Tensor | None = None,
+        attention_mask: Tensor | None = None,
+        kv_cache: dict[int, Tensor] | None = None,
+        inference: bool = False,
+    ) -> Tensor:
+        return super().forward(
+            x, return_hidden_states, xc, attention_mask, kv_cache, inference
+        )
+
     @torch.no_grad()
     def generate(
         self,
         input_ids: torch.Tensor,
-        embed: torch.Tensor | None = None,
-        max_length: int = 10,
-        stop_token: int = 50256,
+        embed: torch.Tensor | None,
+        max_length: int,
+        stop_token: int,
     ) -> list[list[int]]:
         """Generate a sequence of tokens using argmax sampling.
 
@@ -486,7 +583,9 @@ class TextDecoder(nn.Module):
         # Used to track the indexes of the running generations.
         generating_batch_indexes = list(range(batch_size))
         for _ in range(max_length):
-            logits = self.forward(input_ids, embed, inference=True, kv_cache=kv_cache)
+            logits = self.forward(
+                x=input_ids, xc=embed, inference=True, kv_cache=kv_cache
+            )
             input_ids = torch.cat(
                 [input_ids, logits.argmax(dim=-1).unsqueeze(0).t()], dim=1
             )
@@ -514,55 +613,21 @@ class TextDecoder(nn.Module):
             generations[batch_index] = input_ids[i, :].tolist()
         return generations
 
-    @classmethod
-    def from_pretrained(cls, config: TelepathConfig):
-        d_pt = T5ForConditionalGeneration.from_pretrained(
-            config.decoder_pretrained_model
-        )
-        assert isinstance(d_pt, T5ForConditionalGeneration), type(d_pt)
 
-        d_n = cls(
-            n_vocab=config.decoder_vocab_size,
-            encoder_n_ctx=config.encoder_block_size,
-            decoder_n_ctx=config.decoder_block_size,
-            d_model=config.d_model,
-            d_mlp=config.decoder_d_mlp,
-            n_head=config.n_heads,
-            n_layer=config.decoder_n_layers,
-            dropout=config.dropout,
-        )
-
-        new_keys = list(d_n.state_dict().keys())
-        nw_sd = d_n.state_dict()
-        for key, param in d_pt.get_decoder().state_dict().items():
-            param: Tensor
-            new_key = DECODER_PARAM_MAP.map_param(key)
-            assert new_key in new_keys, f"{new_key} not in {new_keys}."
-
-            nw_sd[new_key] = param.clone()
-            if "rp_bias.relative_attention_bias" not in new_key:
-                continue
-            for i in range(1, len(d_n.blocks)):
-                new_key = new_key.replace(f".{i-1}.", f".{i}.")
-                nw_sd[new_key] = param.clone()
-        d_n.load_state_dict(nw_sd)
-        return d_n
-
-
-class Telepath(nn.Module):
+class TelepathGenerator(nn.Module):
     def __init__(self, config: TelepathConfig):
         super().__init__()
         self.config = config
 
         self.encoder = NeuralEncoder(
             n_channels=config.n_eeg_channels,
-            block_size=config.encoder_block_size,
+            block_size=config.neural_encoder_block_size,
             d_model=config.d_model,
-            d_mlp=config.encoder_d_mlp,
+            d_mlp=config.neural_encoder_d_mlp,
             n_heads=config.n_heads,
-            n_layers=config.encoder_n_layers,
+            n_layers=config.neural_encoder_n_layers,
             dropout=config.dropout,
-            scale_exponent=config.encoder_scale_exponent,
+            scale_exponent=config.neural_encoder_scale_exponent,
         )
 
         self.decoder = TextDecoder(
@@ -610,6 +675,7 @@ class Telepath(nn.Module):
         logits = logits.view(-1, logits.size(-1))
         # Mask all padding tokens except the first which are being used as stop tokens.
         loss_mask = token_ids == self.config.decoder_stop_token
+        # HACK: Exploits the fact that argmax breaks ties by returning the lowest index.
         stop_token_indices = (loss_mask == 1).to(torch.long).argmax(dim=1)
         batch_indices = torch.arange(loss_mask.shape[0])
         loss_mask[batch_indices, stop_token_indices] = 0
@@ -668,6 +734,7 @@ class Telepath(nn.Module):
             input_ids=self.start_sequence.repeat(B, 1).detach().to(device),
             embed=enc,
             stop_token=stop_token or self.stop_token,
+            max_length=self.config.
         )
 
     @classmethod
