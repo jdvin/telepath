@@ -147,9 +147,38 @@ class MultiHeadAttention(torch.nn.Module):
 
 
 class RelativePositionMultiHeadAttention(MultiHeadAttention):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.rp_bias = RelativePositionBias(bidirectional=False, n_heads=self.n_heads)
+    def __init__(
+        self,
+        n_heads: int,
+        d_model: int,
+        source_seq_len: int,
+        target_seq_len: int,
+        q_bias: bool = True,
+        k_bias: bool = False,
+        v_bias: bool = True,
+        out_bias: bool = True,
+        scale: float = 0.0,
+        dropout: float = 0.1,
+        is_causal: bool = False,
+        flash: bool = True,
+    ):
+        super().__init__(
+            n_heads=n_heads,
+            d_model=d_model,
+            source_seq_len=source_seq_len,
+            target_seq_len=target_seq_len,
+            q_bias=q_bias,
+            k_bias=k_bias,
+            v_bias=v_bias,
+            out_bias=out_bias,
+            scale=scale,
+            dropout=dropout,
+            is_causal=is_causal,
+            flash=flash,
+        )
+        self.rp_bias = RelativePositionBias(
+            bidirectional=is_causal, n_heads=self.n_heads
+        )
         assert (
             self.source_seq_len == self.target_seq_len
         ), "Relative position MHA can only be used in self-attention!"

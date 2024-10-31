@@ -42,7 +42,6 @@ class ParamMap:
             if i in self.carry_forward_indices:
                 continue
             if mapped_seg := self[carry]:
-                # print(carry, mapped_seg)
                 out_pns.append(mapped_seg)
             carry = ""
 
@@ -65,7 +64,29 @@ WHISPER_PARAM_MAP = ParamMap(
     set(),
 )
 
-T5_PARAM_MAP = ParamMap(
+T5_ENCODER_PARAM_MAP = ParamMap(
+    {
+        "decoder": "",
+        "block": "blocks",
+        "layer": "",
+        "q": "q_proj",
+        "k": "k_proj",
+        "v": "v_proj",
+        "o": "out_proj",
+        "relative_attention_bias": "rp_bias.relative_attention_bias",
+        "0SelfAttention": "attn",
+        "0layer_norm": "attn_ln",
+        "1DenseReluDense": "mlp",
+        "1layer_norm": "mlp_ln",  # Override cross_attn layer norm if not present.
+        "wi_0": "0.W",
+        "wi_1": "0.V",
+        "wo": "1",
+        "final_layer_norm": "ln_post",
+    },
+    {3},
+)
+
+T5_DECODER_PARAM_MAP = ParamMap(
     {
         "decoder": "",
         "block": "blocks",
@@ -81,6 +102,7 @@ T5_PARAM_MAP = ParamMap(
         "1layer_norm": "cross_attn_ln",
         "2DenseReluDense": "mlp",
         "2layer_norm": "mlp_ln",
+        "1DenseReluDense": "mlp",
         "wi_0": "0.W",
         "wi_1": "0.V",
         "wo": "1",
@@ -342,39 +364,6 @@ class NeuralEncoder(nn.Module):
         )
         return optim_groups
 
-    @classmethod
-    def from_pretrained(cls, config: TelepathConfig):
-        e_pt = WhisperModel.from_pretrained(config.encoder_pretrained_model)
-        assert isinstance(e_pt, WhisperModel), type(e_pt)
-
-        e_n = cls(
-            n_channels=config.n_eeg_channels,
-            block_size=config.encoder_block_size,
-            d_model=config.d_model,
-            d_mlp=config.encoder_d_mlp,
-            n_heads=config.n_heads,
-            dropout=config.dropout,
-            n_layers=config.encoder_n_layers,
-            scale_exponent=config.encoder_scale_exponent,
-        )
-        # breakpoint()
-
-        new_keys = list(e_n.state_dict().keys())
-        nw_sd = e_n.state_dict()
-        for key, param in e_pt.get_encoder().state_dict().items():
-            param: Tensor
-            new_key = ENCODER_PARAM_MAP.map_param(key)
-            assert new_key in new_keys, f"{new_key} not in {new_keys}."
-            if "conv" in key:
-                continue
-
-            if key == "encoder.embed_positions.weight":
-                param = param[: config.encoder_block_size, :]
-
-            nw_sd[new_key] = param.clone()
-        e_n.load_state_dict(nw_sd)
-        return e_n
-
 
 class RelativePositionTransformer(nn.Module):
     def __init__(
@@ -440,18 +429,18 @@ class RelativePositionTransformer(nn.Module):
     @classmethod
     def from_pretrained(cls, config: TelepathConfig, cross_attn: bool, is_causal: bool):
         d_pt = T5ForConditionalGeneration.from_pretrained(
-            config.decoder_pretrained_model
+            config.text_encoder_pretrained_model
         )
         assert isinstance(d_pt, T5ForConditionalGeneration), type(d_pt)
 
         d_n = cls(
-            n_vocab=config.decoder_vocab_size,
-            source_n_ctx=config.encoder_block_size,
-            target_n_ctx=config.decoder_block_size,
+            n_vocab=config.text_encoder_vocab_size,
+            source_n_ctx=config.text_encoder_block_size,
+            target_n_ctx=config.text_encoder_block_size,
             d_model=config.d_model,
-            d_mlp=config.decoder_d_mlp,
+            d_mlp=config.text_encoder_d_mlp,
             n_head=config.n_heads,
-            n_layer=config.decoder_n_layers,
+            n_layer=config.text_encoder_n_layers,
             dropout=config.dropout,
             cross_attn=cross_attn,
             is_causal=is_causal,
@@ -459,9 +448,14 @@ class RelativePositionTransformer(nn.Module):
 
         new_keys = list(d_n.state_dict().keys())
         nw_sd = d_n.state_dict()
-        for key, param in d_pt.get_decoder().state_dict().items():
+        param_map = T5_ENCODER_PARAM_MAP if not cross_attn else T5_DECODER_PARAM_MAP
+        for key, param in (
+            getattr(d_pt, "get_encoder" if not cross_attn else "get_decoder")()
+            .state_dict()
+            .items()
+        ):
             param: Tensor
-            new_key = T5_PARAM_MAP.map_param(key)
+            new_key = param_map.map_param(key)
             assert new_key in new_keys, f"{new_key} not in {new_keys}."
 
             nw_sd[new_key] = param.clone()
@@ -487,6 +481,8 @@ class TextEncoder(RelativePositionTransformer):
         checkpoint_activations: bool = False,
         scale_exponent: float = 0,
         dropout: float = 0.1,
+        cross_attn: bool = False,
+        is_causal: bool = False,
     ):
         super().__init__(
             n_vocab=n_vocab,
@@ -499,8 +495,8 @@ class TextEncoder(RelativePositionTransformer):
             checkpoint_activations=checkpoint_activations,
             scale_exponent=scale_exponent,
             dropout=dropout,
-            cross_attn=False,
-            is_causal=False,
+            cross_attn=cross_attn,
+            is_causal=is_causal,
         )
 
     def forward(
@@ -516,6 +512,11 @@ class TextEncoder(RelativePositionTransformer):
             x, return_hidden_states, xc, attention_mask, kv_cache, inference
         )
 
+    @classmethod
+    def from_pretrained(cls, config: TelepathConfig, *args, **kwargs):
+        # breakpoint()
+        return super().from_pretrained(config, cross_attn=False, is_causal=False)
+
 
 class TextDecoder(RelativePositionTransformer):
     def __init__(
@@ -530,6 +531,8 @@ class TextDecoder(RelativePositionTransformer):
         checkpoint_activations: bool = False,
         scale_exponent: float = 0,
         dropout: float = 0.1,
+        cross_attn: bool = True,
+        is_causal: bool = True,
     ):
         super().__init__(
             n_vocab=n_vocab,
@@ -542,8 +545,8 @@ class TextDecoder(RelativePositionTransformer):
             checkpoint_activations=checkpoint_activations,
             scale_exponent=scale_exponent,
             dropout=dropout,
-            cross_attn=True,
-            is_causal=True,
+            cross_attn=cross_attn,
+            is_causal=is_causal,
         )
 
     def forward(
@@ -556,7 +559,12 @@ class TextDecoder(RelativePositionTransformer):
         inference: bool = False,
     ) -> Tensor:
         return super().forward(
-            x, return_hidden_states, xc, attention_mask, kv_cache, inference
+            x=x,
+            return_hidden_states=return_hidden_states,
+            xc=xc,
+            attention_mask=attention_mask,
+            kv_cache=kv_cache,
+            inference=inference,
         )
 
     @torch.no_grad()
@@ -613,6 +621,10 @@ class TextDecoder(RelativePositionTransformer):
             generations[batch_index] = input_ids[i, :].tolist()
         return generations
 
+    @classmethod
+    def from_pretrained(cls, config: TelepathConfig, *args, **kwargs):
+        return super().from_pretrained(config, cross_attn=True, is_causal=True)
+
 
 class TelepathGenerator(nn.Module):
     def __init__(self, config: TelepathConfig):
@@ -631,24 +643,26 @@ class TelepathGenerator(nn.Module):
         )
 
         self.decoder = TextDecoder(
-            n_vocab=config.decoder_vocab_size,
-            encoder_n_ctx=config.encoder_block_size,
-            decoder_n_ctx=config.decoder_block_size,
+            n_vocab=config.text_encoder_vocab_size,
+            source_n_ctx=config.neural_encoder_block_size,
+            target_n_ctx=config.text_encoder_block_size,
             d_model=config.d_model,
-            d_mlp=config.decoder_d_mlp,
+            d_mlp=config.text_encoder_d_mlp,
             n_head=config.n_heads,
-            n_layer=config.decoder_n_layers,
+            n_layer=config.text_encoder_n_layers,
             dropout=config.dropout,
         )
 
-        if not config.train_decoder:
-            for param in self.decoder.parameters():
+        if not config.train_text_encoder:
+            for param in self.text_encoder.parameters():
                 param.requires_grad = False
 
-        self.start_sequence = config.decoder_start_sequence
-        self.stop_token = config.decoder_stop_token
+        self.start_sequence = config.text_encoder_start_sequence
+        self.stop_token = config.text_encoder_stop_token
 
-        self.tokenizer = AutoTokenizer.from_pretrained(config.decoder_pretrained_model)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            config.text_encoder_pretrained_model
+        )
 
     def forward(
         self, eeg: Tensor, input_ids: Tensor, attention_mask: Tensor | None = None
@@ -674,7 +688,7 @@ class TelepathGenerator(nn.Module):
         # Flatten logits tensor (B x T-1 x V) to 2D tensor ((B T-1) x V) for loss calculation.
         logits = logits.view(-1, logits.size(-1))
         # Mask all padding tokens except the first which are being used as stop tokens.
-        loss_mask = token_ids == self.config.decoder_stop_token
+        loss_mask = token_ids == self.config.text_encoder_stop_token
         # HACK: Exploits the fact that argmax breaks ties by returning the lowest index.
         stop_token_indices = (loss_mask == 1).to(torch.long).argmax(dim=1)
         batch_indices = torch.arange(loss_mask.shape[0])
@@ -734,7 +748,7 @@ class TelepathGenerator(nn.Module):
             input_ids=self.start_sequence.repeat(B, 1).detach().to(device),
             embed=enc,
             stop_token=stop_token or self.stop_token,
-            max_length=self.config.
+            max_length=self.config.text_encoder_block_size,
         )
 
     @classmethod
@@ -742,5 +756,7 @@ class TelepathGenerator(nn.Module):
         """Initialize the model from pretrained Whisper."""
         model = cls(config)
         model.encoder = NeuralEncoder.from_pretrained(config)
-        model.decoder = TextDecoder.from_pretrained(config)
+        model.decoder = TextDecoder.from_pretrained(
+            config, cross_attn=True, is_causal=True
+        )
         return model
