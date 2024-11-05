@@ -1,7 +1,7 @@
 from dataclasses import dataclass
+import functools
 import random
 from typing import Any, Callable
-
 from transformers import (
     AutoModel,
     AutoTokenizer,
@@ -56,7 +56,8 @@ def save_tensor_forward_pre_hook(
     input_to_target_map: Callable[[Any], torch.Tensor],
     name: str,
 ) -> None:
-    pass
+    t = input_to_target_map(input)
+    torch.save(t, name + ".pt")
 
 
 def save_tensor_forward_hook(
@@ -66,7 +67,8 @@ def save_tensor_forward_hook(
     output_to_target_map: Callable[[Any], torch.Tensor],
     name: str,
 ) -> None:
-    pass
+    t = output_to_target_map(output)
+    torch.save(t, name + ".pt")
 
 
 @dataclass
@@ -76,12 +78,52 @@ class ModuleMap:
     output_to_target_map: Callable[[Any], torch.Tensor]
 
 
+def install_hooks(module: nn.Module, module_map: ModuleMap) -> tuple[str, str]:
+    pre_hook_tensor_path = module.__class__.__name__ + module_map.name + "pre"
+    pre_hook = functools.partial(
+        save_tensor_forward_pre_hook,
+        input_to_target_map=module_map.input_to_target_map,
+        name=pre_hook_tensor_path,
+    )
+    module.register_forward_pre_hook(pre_hook)
+    post_hook_tensor_path = module.__class__.__name__ + module_map.name + "post"
+    post_hook = functools.partial(
+        save_tensor_forward_hook,
+        output_to_target_map=module_map.input_to_target_map,
+        name=post_hook_tensor_path,
+    )
+    module.register_forward_hook(post_hook)
+    return pre_hook_tensor_path, post_hook_tensor_path
+
+
 def test_divergence(
     module1: nn.Module,
     module2: nn.Module,
+    test_input: torch.Tensor,
     module_map_pairs: list[tuple[ModuleMap, ModuleMap]],
 ):
-    pass
+    module1_tensor_paths: list[str] = []
+    module2_tensor_paths: list[str] = []
+    for module_map_pair in module_map_pairs:
+        for name, mod in module1.named_modules():
+            if module_map_pair[0].name in name:
+                module1_tensor_paths.extend(install_hooks(mod, module_map_pair[0]))
+        for name, mod in module2.named_modules():
+            if module_map_pair[1].name in name:
+                module2_tensor_paths.extend(install_hooks(mod, module_map_pair[1]))
+
+    out = module1(test_input)
+    out = module2(test_input)
+
+    for (
+        module1_tensor_path,
+        module2_tensor_path,
+    ) in zip(module1_tensor_paths, module2_tensor_paths):
+        m1 = torch.load(module1_tensor_path + ".pt")
+        m2 = torch.load(module2_tensor_path + ".pt")
+        assert torch.equal(
+            m1, m2
+        ), f"Model divergence detected: {module1_tensor_path} != {module2_tensor_path}"
 
 
 def get_rtol(a, b):
