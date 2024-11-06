@@ -111,23 +111,35 @@ def check_divergence(
     test_input: tuple,
     module_map_pairs: list[tuple[ModuleMap, ModuleMap]],
 ):
-    # TODO: The lists are not being constructed in the correct order.
-    module1_tensor_paths: list[str] = []
-    module2_tensor_paths: list[str] = []
+    # List of [module_index, (module_path_pre, module_path_post)].
+    module1_indexed_tensor_paths: list[tuple[int, tuple[str, str]]] = []
+    module2_indexed_tensor_paths: list[tuple[int, tuple[str, str]]] = []
     for module_map_pair in module_map_pairs:
-        for name, mod in module1.named_modules():
+        # TODO: This for-loop logic can be included in the `install_hooks` method, it is repeated verbatim per module.
+        for i, (name, mod) in enumerate(module1.named_modules()):
+            # Install hooks in each matching module and capture the paths.
             if name.endswith(module_map_pair[0].name):
-                module1_tensor_paths.extend(
-                    install_hooks(mod, name, module_map_pair[0])
+                module1_indexed_tensor_paths.append(
+                    (i, install_hooks(mod, name, module_map_pair[0]))
                 )
-        for name, mod in module2.named_modules():
+        for i, (name, mod) in enumerate(module2.named_modules()):
             if name.endswith(module_map_pair[1].name):
-                module2_tensor_paths.extend(
-                    install_hooks(mod, name, module_map_pair[1])
+                module2_indexed_tensor_paths.append(
+                    (i, install_hooks(mod, name, module_map_pair[1]))
                 )
-    assert len(module1_tensor_paths) == len(module2_tensor_paths)
-    out = module1(**module1_inputs_to_kwargs(test_input))
-    out = module2(**module2_inputs_to_kwargs(test_input))
+    assert len(module1_indexed_tensor_paths) == len(module2_indexed_tensor_paths)
+    module1(**module1_inputs_to_kwargs(test_input))
+    module2(**module2_inputs_to_kwargs(test_input))
+    module1_tensor_paths: list[str] = [
+        module_tensor_path
+        for module_tensor_paths in sorted(module1_indexed_tensor_paths, key=element_0)
+        for module_tensor_path in module_tensor_paths[1]
+    ]
+    module2_tensor_paths: list[str] = [
+        module_tensor_path
+        for module_tensor_paths in sorted(module2_indexed_tensor_paths, key=element_0)
+        for module_tensor_path in module_tensor_paths[1]
+    ]
     for (
         module1_tensor_path,
         module2_tensor_path,
@@ -138,6 +150,7 @@ def check_divergence(
         assert torch.equal(
             m1, m2
         ), f"Model divergence detected: {module1_tensor_path} != {module2_tensor_path}"
+        print("Success!")
 
 
 def get_rtol(a, b):
@@ -167,10 +180,10 @@ def test_text_encoder():
     # activations = encoder(inputs)
     # ref_activations = ref_encoder(input_ids=inputs)
     map = [
-        # (
-        #     ModuleMap("attn_ln"),
-        #     ModuleMap("0.layer_norm"),
-        # ),
+        (
+            ModuleMap("attn_ln"),
+            ModuleMap("0.layer_norm"),
+        ),
         (
             ModuleMap("attn"),
             ModuleMap("0.SelfAttention", output_to_target_map=element_0),
