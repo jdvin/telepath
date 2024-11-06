@@ -211,7 +211,7 @@ class ResidualAttentionBlock(nn.Module):
         kv_cache: dict[int, Tensor] | None = None,
     ) -> Tensor:
         x = x + self.attn(
-            x=self.attn_ln(x), attention_mask=attention_mask, kv_cache=kv_cache
+            self.attn_ln(x), attention_mask=attention_mask, kv_cache=kv_cache
         )
         if self.cross_attn and self.cross_attn_ln:
             x = x + self.cross_attn(
@@ -337,7 +337,7 @@ class NeuralEncoder(nn.Module):
             )
         else:
             for block in self.blocks:
-                x = block(x=x)
+                x = block(x)
         x = self.ln_post(x)
         return x
 
@@ -514,7 +514,6 @@ class TextEncoder(RelativePositionTransformer):
 
     @classmethod
     def from_pretrained(cls, config: TelepathConfig, *args, **kwargs):
-        # breakpoint()
         return super().from_pretrained(config, cross_attn=False, is_causal=False)
 
 

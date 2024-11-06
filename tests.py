@@ -49,6 +49,11 @@ ref_text_model = T5ForConditionalGeneration.from_pretrained(
     config.text_encoder_pretrained_model, config=ref_config
 )
 
+identity = lambda x: x
+element_0 = lambda x: x[0]
+hf_t5_encoder_inputs_to_kwargs = lambda inputs: {"input_ids": inputs[0]}
+text_encoder_attn_inputs_to_kwargs = lambda inputs: {"x": inputs[0]}
+
 
 def save_tensor_forward_pre_hook(
     module: nn.Module,
@@ -74,19 +79,21 @@ def save_tensor_forward_hook(
 @dataclass
 class ModuleMap:
     name: str
-    input_to_target_map: Callable[[Any], torch.Tensor]
-    output_to_target_map: Callable[[Any], torch.Tensor]
+    input_to_target_map: Callable[[Any], torch.Tensor] = element_0
+    output_to_target_map: Callable[[Any], torch.Tensor] = identity
 
 
-def install_hooks(module: nn.Module, module_map: ModuleMap) -> tuple[str, str]:
-    pre_hook_tensor_path = module.__class__.__name__ + module_map.name + "pre"
+def install_hooks(
+    module: nn.Module, name: str, module_map: ModuleMap
+) -> tuple[str, str]:
+    pre_hook_tensor_path = name + "-pre"
     pre_hook = functools.partial(
         save_tensor_forward_pre_hook,
         input_to_target_map=module_map.input_to_target_map,
         name=pre_hook_tensor_path,
     )
     module.register_forward_pre_hook(pre_hook)
-    post_hook_tensor_path = module.__class__.__name__ + module_map.name + "post"
+    post_hook_tensor_path = name + "-post"
     post_hook = functools.partial(
         save_tensor_forward_hook,
         output_to_target_map=module_map.input_to_target_map,
@@ -96,29 +103,36 @@ def install_hooks(module: nn.Module, module_map: ModuleMap) -> tuple[str, str]:
     return pre_hook_tensor_path, post_hook_tensor_path
 
 
-def test_divergence(
+def check_divergence(
     module1: nn.Module,
+    module1_inputs_to_kwargs: Callable[[tuple], dict],
     module2: nn.Module,
-    test_input: torch.Tensor,
+    module2_inputs_to_kwargs: Callable[[tuple], dict],
+    test_input: tuple,
     module_map_pairs: list[tuple[ModuleMap, ModuleMap]],
 ):
+    # TODO: The lists are not being constructed in the correct order.
     module1_tensor_paths: list[str] = []
     module2_tensor_paths: list[str] = []
     for module_map_pair in module_map_pairs:
         for name, mod in module1.named_modules():
-            if module_map_pair[0].name in name:
-                module1_tensor_paths.extend(install_hooks(mod, module_map_pair[0]))
+            if name.endswith(module_map_pair[0].name):
+                module1_tensor_paths.extend(
+                    install_hooks(mod, name, module_map_pair[0])
+                )
         for name, mod in module2.named_modules():
-            if module_map_pair[1].name in name:
-                module2_tensor_paths.extend(install_hooks(mod, module_map_pair[1]))
-
-    out = module1(test_input)
-    out = module2(test_input)
-
+            if name.endswith(module_map_pair[1].name):
+                module2_tensor_paths.extend(
+                    install_hooks(mod, name, module_map_pair[1])
+                )
+    assert len(module1_tensor_paths) == len(module2_tensor_paths)
+    out = module1(**module1_inputs_to_kwargs(test_input))
+    out = module2(**module2_inputs_to_kwargs(test_input))
     for (
         module1_tensor_path,
         module2_tensor_path,
     ) in zip(module1_tensor_paths, module2_tensor_paths):
+        print(f"Checking equivalence: {module1_tensor_path} == {module2_tensor_path}.")
         m1 = torch.load(module1_tensor_path + ".pt")
         m2 = torch.load(module2_tensor_path + ".pt")
         assert torch.equal(
@@ -148,11 +162,28 @@ def test_text_encoder():
     ref_encoder = ref_text_model.get_encoder()
     encoder = TextEncoder.from_pretrained(config)
     inputs = torch.tensor([[0, 1], [0, 1], [0, 1]])
-    encoder.blocks[0].register_forward_pre_hook(debug_hook)
-    ref_encoder.block[0].register_forward_pre_hook(debug_hook)
-    activations = encoder(inputs)
-    ref_activations = ref_encoder(input_ids=inputs)
-    assert torch.equal(activations, ref_activations.last_hidden_state)
+    # encoder.blocks[0].register_forward_pre_hook(debug_hook)
+    # ref_encoder.block[0].register_forward_pre_hook(debug_hook)
+    # activations = encoder(inputs)
+    # ref_activations = ref_encoder(input_ids=inputs)
+    map = [
+        # (
+        #     ModuleMap("attn_ln"),
+        #     ModuleMap("0.layer_norm"),
+        # ),
+        (
+            ModuleMap("attn"),
+            ModuleMap("0.SelfAttention", output_to_target_map=element_0),
+        ),
+    ]
+    check_divergence(
+        encoder,
+        text_encoder_attn_inputs_to_kwargs,
+        ref_encoder,
+        hf_t5_encoder_inputs_to_kwargs,
+        (inputs,),
+        map,
+    )
 
 
 def test_text_decoder():
