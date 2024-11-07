@@ -169,24 +169,49 @@ def test_position_in_cycle():
             assert position_in_cycle((i, 10)) == i - 10
 
 
+def check_relative_position_bias(model, ref_model, is_causal):
+    attn = model.blocks[0].attn
+    rp_bias = attn.rp_bias
+    bias_live = rp_bias(10, 10)
+    bias_static = attn.bias
+    ref_attn = ref_model.block[0].layer[0].SelfAttention
+    ref_bias = ref_attn.compute_bias(10, 10)
+    # Test that the bias is calculated the same.
+    assert torch.equal(bias_live, ref_bias)
+    if is_causal:
+        ref_bias = ref_bias + get_causal_mask_for_bias(ref_bias)
+    # Test that the bias is recalculated correctly after loading weights.
+    assert torch.equal(
+        ref_bias,
+        bias_static,
+    )
+
+
 def test_text_encoder():
     global activations
     global ref_activations
     ref_encoder = ref_text_model.get_encoder()
     encoder = TextEncoder.from_pretrained(config)
+    check_relative_position_bias(encoder, ref_encoder, False)
     inputs = torch.tensor([[0, 1], [0, 1], [0, 1]])
     # encoder.blocks[0].register_forward_pre_hook(debug_hook)
     # ref_encoder.block[0].register_forward_pre_hook(debug_hook)
-    # activations = encoder(inputs)
-    # ref_activations = ref_encoder(input_ids=inputs)
     map = [
         (
-            ModuleMap("attn_ln"),
-            ModuleMap("0.layer_norm"),
+            ModuleMap(".q_proj"),
+            ModuleMap(".q"),
         ),
         (
-            ModuleMap("attn"),
-            ModuleMap("0.SelfAttention", output_to_target_map=element_0),
+            ModuleMap(".k_proj"),
+            ModuleMap(".k"),
+        ),
+        (
+            ModuleMap(".v_proj"),
+            ModuleMap(".v"),
+        ),
+        (
+            ModuleMap(".out_proj"),
+            ModuleMap(".o"),
         ),
     ]
     check_divergence(
@@ -197,18 +222,21 @@ def test_text_encoder():
         (inputs,),
         map,
     )
+    activations = encoder(inputs)
+    ref_activations = ref_encoder(input_ids=inputs).last_hidden_state
+    assert torch.equal(activations, ref_activations)
 
 
 def test_text_decoder():
     global activations
     global ref_activations
     ref_decoder = ref_text_model.get_decoder()
-    decoder = TextEncoder.from_pretrained(config)
+    decoder = TextDecoder.from_pretrained(config)
     inputs = torch.tensor([[0, 1], [0, 1], [0, 1]])
-    activations = decoder(inputs, activations, return_hidden_states=True)
+    activations = decoder(inputs, True, activations)
     ref_activations = ref_decoder(
         input_ids=inputs,
-        encoder_hidden_states=ref_activations.last_hidden_state,
+        encoder_hidden_states=ref_activations,
     )
     assert torch.equal(activations, ref_activations.last_hidden_state)
 
@@ -224,19 +252,19 @@ def test_generation():
     stop_token_id = 999
     max_length = 10
 
-    def dummy_forward(input_ids, embeddings, inference) -> torch.Tensor:
+    def dummy_forward(x, xc, inference, kv_cache) -> torch.Tensor:
         global iteration
         # Each output is the value of the embedding for the given input unless `embedding_value == iteration`, then we append the stop token to end the sequence.
         out = torch.tensor(
             [
                 [stop_token_id] if iteration == embed[0][0] else [embed[0][0]]
-                for embed in embeddings
+                for embed in xc
             ]
         )
 
         out = F.one_hot(
             out,
-            decoder.vocab_size,
+            decoder.n_vocab,
         )
         iteration += 1
         return out
@@ -253,14 +281,12 @@ def test_generation():
         torch.tensor([[[3]], [[2]], [[1]]]),
     ]:
         iteration = 0
-        print(embeddings)
         generations = decoder.generate(
             input_ids=torch.tensor([[0], [0], [0]]),
             embed=embeddings,
             max_length=max_length,
             stop_token=stop_token_id,
         )
-        print(generations)
 
         assert sorted(generations, key=lambda g: len(g)) == [
             [0, 1, stop_token_id],

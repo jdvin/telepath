@@ -8,10 +8,10 @@ In short, my thought process is the following:
 ## TODO:
 - [x] Modify RPA to work with non-causal attention.
 - [x] Implement T5 encoder.
-    - [ ] Make test.
+    - [x] Make test.
         - Auto model divergence analyser
             - receive maps from module names between models, and input/output to tensor functions, and install hooks to save the tensors and then load and compare them for each module
-- [ ] Implement neural encoder from first principles.
+- [x] Implement neural encoder from first principles.
         - Keep linear proj.
         - Use RMS norm.
         - shift (but not scale) to t=0 before projection.

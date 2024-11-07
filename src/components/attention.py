@@ -177,7 +177,7 @@ class RelativePositionMultiHeadAttention(MultiHeadAttention):
             flash=flash,
         )
         self.rp_bias = RelativePositionBias(
-            bidirectional=is_causal, n_heads=self.n_heads
+            bidirectional=not is_causal, n_heads=self.n_heads
         )
         assert (
             self.source_seq_len == self.target_seq_len

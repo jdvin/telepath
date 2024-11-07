@@ -164,7 +164,6 @@ class ResidualAttentionBlock(nn.Module):
         n_heads: int,
         d_mlp: int,
         is_causal: bool,
-        activation: nn.Module = nn.GELU,
         cross_attn: bool = False,
         dropout: float = 0.0,
         scale_exponent: float = -0.25,
@@ -179,7 +178,7 @@ class ResidualAttentionBlock(nn.Module):
             dropout=dropout,
             is_causal=is_causal,
         )
-        self.attn_ln = nn.LayerNorm(d_model)
+        self.attn_ln = RMSNorm(d_model)
 
         self.cross_attn = (
             MultiHeadAttention(
@@ -194,14 +193,13 @@ class ResidualAttentionBlock(nn.Module):
             if cross_attn
             else None
         )
-        self.cross_attn_ln = nn.LayerNorm(d_model) if cross_attn else None
+        self.cross_attn_ln = RMSNorm(d_model) if cross_attn else None
 
         self.mlp = nn.Sequential(
-            nn.Linear(d_model, d_mlp),
-            activation(),
-            nn.Linear(d_mlp, d_model),
+            GEGLU(d_model, d_mlp, bias=False),
+            nn.Linear(d_mlp, d_model, bias=False),
         )
-        self.mlp_ln = nn.LayerNorm(d_model)
+        self.mlp_ln = RMSNorm(d_model)
 
     def forward(
         self,
@@ -233,7 +231,6 @@ class RelativePositionResidualAttentionBlock(ResidualAttentionBlock):
         n_heads: int,
         d_mlp: int,
         is_causal: bool,
-        activation: nn.Module = nn.GELU,
         cross_attn: bool = False,
         dropout: float = 0.1,
         scale_exponent: float = 0,
@@ -245,7 +242,6 @@ class RelativePositionResidualAttentionBlock(ResidualAttentionBlock):
             n_heads=n_heads,
             d_mlp=d_mlp,
             is_causal=is_causal,
-            activation=activation,
             cross_attn=cross_attn,
             dropout=dropout,
             scale_exponent=scale_exponent,
@@ -304,7 +300,7 @@ class NeuralEncoder(nn.Module):
         checkpoint_activations: bool = False,
     ):
         super().__init__()
-
+        self.pre_norm = RMSNorm(d_model)
         self.embed_positions = nn.Embedding(block_size, d_model)
         self.embed_positions.weight = nn.Parameter(sinusoids(block_size, d_model))
         self.sample_proj = nn.Linear(n_channels, d_model)
@@ -322,14 +318,14 @@ class NeuralEncoder(nn.Module):
             )
             for _ in range(n_layers)
         )
-        self.ln_post = nn.LayerNorm(d_model)
+        self.ln_post = RMSNorm(d_model)
         self.d_model = d_model
         self.checkpoint_activations = checkpoint_activations
 
     def forward(self, x: Tensor) -> Tensor:
         # (batch_size, n_eeg_channels, sequence_length)
         B, N_C, T = x.size()
-        x = self.sample_proj(x.transpose(-1, -2))
+        x = self.sample_proj(self.pre_norm(x).transpose(-1, -2))
         x = (x + self.embed_positions.weight[None, :, :]).to(x.dtype)
         if self.checkpoint_activations:
             x = checkpoint_sequential(
@@ -399,6 +395,7 @@ class RelativePositionTransformer(nn.Module):
         )
         self.ln_post = RMSNorm(d_model)
         self.checkpoint_activations = checkpoint_activations
+        self.n_vocab = n_vocab
 
     def forward(
         self,
@@ -593,9 +590,7 @@ class TextDecoder(RelativePositionTransformer):
             logits = self.forward(
                 x=input_ids, xc=embed, inference=True, kv_cache=kv_cache
             )
-            input_ids = torch.cat(
-                [input_ids, logits.argmax(dim=-1).unsqueeze(0).t()], dim=1
-            )
+            input_ids = torch.cat([input_ids, logits.argmax(dim=-1)], dim=1)
             # Get the index of every generation that has generated the stop token.
             stop_indexes = (
                 (input_ids[:, -1] == stop_token).nonzero(as_tuple=True)[0].tolist()
@@ -754,7 +749,7 @@ class TelepathGenerator(nn.Module):
     def from_pretrained(cls, config: TelepathConfig):
         """Initialize the model from pretrained Whisper."""
         model = cls(config)
-        model.encoder = NeuralEncoder.from_pretrained(config)
+        # model.encoder = NeuralEncoder.from_pretrained(config)
         model.decoder = TextDecoder.from_pretrained(
             config, cross_attn=True, is_causal=True
         )
