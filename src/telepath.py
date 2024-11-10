@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import List, Sequence, Iterable
-
+import math
 import numpy as np
 import torch
 from torch import nn, Tensor, tensor
@@ -126,15 +126,14 @@ class TelepathConfig:
     fft_hop_length: int | None = None
     d_model: int = 0
     neural_encoder_d_mlp: int = 0
-    neural_encoder_activation: str = ""
     text_encoder_d_mlp: int = 0
-    text_encoder_activation: str = ""
     n_heads: int = 0
     neural_encoder_n_layers: int = 0
     text_encoder_n_layers: int = 0
     dropout: float = 0.1
     neural_encoder_scale_exponent: float = -0.25
     train_text_encoder: bool = False
+    cache_text_embeddings: bool = True
 
     @classmethod
     def from_yaml(cls, path: str):
@@ -289,7 +288,7 @@ class RelativePositionResidualAttentionBlock(ResidualAttentionBlock):
 class NeuralEncoder(nn.Module):
     def __init__(
         self,
-        n_channels: int,
+        n_input_channels: int,
         block_size: int,
         d_model: int,
         d_mlp: int,
@@ -303,7 +302,7 @@ class NeuralEncoder(nn.Module):
         self.pre_norm = RMSNorm(d_model)
         self.embed_positions = nn.Embedding(block_size, d_model)
         self.embed_positions.weight = nn.Parameter(sinusoids(block_size, d_model))
-        self.sample_proj = nn.Linear(n_channels, d_model)
+        self.sample_proj = nn.Linear(n_input_channels, d_model)
 
         self.blocks = nn.ModuleList(
             ResidualAttentionBlock(
@@ -620,13 +619,67 @@ class TextDecoder(RelativePositionTransformer):
         return super().from_pretrained(config, cross_attn=True, is_causal=True)
 
 
+def mean_reduce(t: Tensor) -> Tensor:
+    return t.mean(dim=1)
+
+
+class TelepathTrainer(nn.Module):
+    def __init__(self, config: TelepathConfig):
+        self.neural_encoder = NeuralEncoder(
+            n_input_channels=config.n_eeg_channels,
+            block_size=config.neural_encoder_block_size,
+            d_model=config.d_model,
+            d_mlp=4 * config.d_model,
+            n_heads=config.n_heads,
+            n_layers=config.neural_encoder_n_layers,
+            dropout=config.dropout,
+            scale_exponent=config.neural_encoder_scale_exponent,
+        )
+        self.neural_pooling_fn = mean_reduce
+        self.neural_projection = nn.Linear(config.d_model, config.d_model)
+
+        self.text_encoder = TextEncoder.from_pretrained(config)
+        self.text_pooling_fn = mean_reduce
+        self.text_projection = nn.Linear(config.d_model, config.d_model)
+
+        self.t_prime = nn.Parameter(torch.tensor(math.log(10)))
+        self.b = nn.Parameter(torch.tensor(-10))
+
+        if config.cache_text_embeddings:
+            self.text_embeddings_cache: dict[str, Tensor] = {}
+
+    @property
+    def t(self):
+        return torch.exp(self.t_prime)
+
+    def compute_text_embedding_cache(self, vocabulary: list[list[int]]) -> None:
+        self.text_embedding_cache = {
+            str(token_ids): self.text_encoder(token_ids) for token_ids in vocabulary
+        }
+
+    def step(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor, Tensor]:
+        (
+            eeg,
+            token_ids,
+        ) = (batch["input_features"], batch["input_ids"])
+        eeg = eeg.to(dtype=torch.bfloat16)
+        eeg_enc = self.neural_pooling_fn(self.neural_encoder(eeg))
+        eeg_proj = self.neural_projection(eeg_enc)
+
+        text_enc = self.text_pooling_fn(self.text_encoder(token_ids))
+        text_proj = self.text_projection(text_enc)
+
+    def sigmoid_loss(self, eeg_proj, text_proj):
+        pass
+
+
 class TelepathGenerator(nn.Module):
     def __init__(self, config: TelepathConfig):
         super().__init__()
         self.config = config
 
         self.encoder = NeuralEncoder(
-            n_channels=config.n_eeg_channels,
+            n_input_channels=config.n_eeg_channels,
             block_size=config.neural_encoder_block_size,
             d_model=config.d_model,
             d_mlp=config.neural_encoder_d_mlp,

@@ -25,5 +25,7 @@ In short, my thought process is the following:
             - can just be indexes into the precomputed text emb matrix
 - [ ] new val metrics
     - accuracy @ n 
+- [ ] add THINGS-EEG data (50ms)
+    - add shift for forward so that epoch always begins at constant point
 
 - [ ] figure out what is going on with the generation tables?
