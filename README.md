@@ -16,9 +16,9 @@ In short, my thought process is the following:
         - Use RMS norm.
         - shift (but not scale) to t=0 before projection.
 - [ ] SLINP-Telepath
-    - [ ] simese model definition
+    - [x] simese model definition
         - if we just use THINGS then we can pre-compute the text embeddings
-    - [ ] SigLIP Loss fn
+    - [x] SigLIP Loss fn
     - [ ] microbatch data swapping algorithm
         - mbs are n_mb neu-text pairs
         - texts are swapped between devices
