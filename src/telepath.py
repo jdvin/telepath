@@ -4,6 +4,7 @@ import math
 import numpy as np
 import torch
 from torch import nn, Tensor, tensor
+from torch.distributed import all_gather_into_tensor
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint_sequential
 from torch.optim import AdamW
@@ -512,6 +513,10 @@ class TextEncoder(RelativePositionTransformer):
     def from_pretrained(cls, config: TelepathConfig, *args, **kwargs):
         return super().from_pretrained(config, cross_attn=False, is_causal=False)
 
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
 
 class TextDecoder(RelativePositionTransformer):
     def __init__(
@@ -618,6 +623,10 @@ class TextDecoder(RelativePositionTransformer):
     def from_pretrained(cls, config: TelepathConfig, *args, **kwargs):
         return super().from_pretrained(config, cross_attn=True, is_causal=True)
 
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
 
 def masked_mean_reduce(tensor: Tensor, mask: Tensor) -> Tensor:
     masked_tensor = tensor * mask.to(torch.int)
@@ -625,7 +634,7 @@ def masked_mean_reduce(tensor: Tensor, mask: Tensor) -> Tensor:
 
 
 class TelepathTrainer(nn.Module):
-    def __init__(self, config: TelepathConfig):
+    def __init__(self, config: TelepathConfig, rank: int, world_size: int):
         self.neural_encoder = NeuralEncoder(
             n_input_channels=config.n_eeg_channels,
             block_size=config.neural_encoder_block_size,
@@ -647,7 +656,10 @@ class TelepathTrainer(nn.Module):
         if config.cache_text_embeddings:
             self.text_embeddings_cache: dict[str, Tensor] = {}
 
+        self.d_model = config.d_model
         self.pad_token_id = config.text_encoder_stop_token
+        self.world_size = world_size
+        self.rank = rank
 
     @property
     def t(self):
@@ -655,7 +667,10 @@ class TelepathTrainer(nn.Module):
 
     def compute_text_embedding_cache(self, vocabulary: list[list[int]]) -> None:
         self.text_embedding_cache = {
-            str(token_ids): self.text_encoder(token_ids) for token_ids in vocabulary
+            str(token_ids): self.text_encoder(
+                torch.tensor(token_ids).to(self.text_encoder.device)
+            )
+            for token_ids in vocabulary
         }
 
     def step(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor, Tensor]:
@@ -663,21 +678,42 @@ class TelepathTrainer(nn.Module):
             eeg,
             token_ids,
         ) = (batch["input_features"], batch["input_ids"])
-        eeg = eeg.to(dtype=torch.bfloat16)
+        B = eeg.shape[0]
         eeg_enc = masked_mean_reduce(
             self.neural_encoder(eeg),
             torch.ones(*eeg.shape[:1]),
         )
         eeg_proj = self.neural_projection(eeg_enc)
-        padding_mask = (token_ids != self.pad_token_id).to(torch.long)
-        text_enc = masked_mean_reduce(
-            self.text_encoder(token_ids),
-            padding_mask,
-        )
+        if self.cache_text_embeddings:
+            # TODO: Make this less stupid. Maybe nn.Embeddings?
+            text_enc = torch.concat(
+                [self.text_embedding_cache[str(item.tolist())] for item in token_ids]
+            ).to(self.eeg_proj.device)
+        else:
+            padding_mask = (token_ids != self.pad_token_id).to(torch.long)
+            text_enc = masked_mean_reduce(
+                self.text_encoder(token_ids),
+                padding_mask,
+            )
         text_proj = self.text_projection(text_enc)
+        global_batch_text_projs = torch.zeros(
+            B * self.ws, self.d_model, device=self.rank, dtype=text_proj.device
+        )
+        all_gather_into_tensor(global_batch_text_projs, text_proj)
+        loss = torch.zeros(1)
+        for i in range(self.world_size):
+            loss += (
+                self.sigmoid_loss(
+                    eeg_proj,
+                    global_batch_text_projs[i * B : i * B + B],
+                    on_diag=i == self.rank,
+                )
+                / self.world_size
+            )
+        return eeg_proj, text_proj, loss
 
-    def loss(self, eeg_proj, text_proj, on_diag: bool) -> Tensor:
-        xy = eeg_proj @ text_proj
+    def sigmoid_loss(self, eeg_proj, text_proj, on_diag: bool) -> Tensor:
+        xy = eeg_proj @ text_proj.T
         z = torch.full_like(xy, -1)
         if on_diag:
             z.fill_diagonal_(1)

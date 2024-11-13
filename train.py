@@ -17,7 +17,6 @@ from utils.data_utils import extract_things_100ms_ds, get_collate_fn
 
 # from pytorch_memlab import MemReporter
 
-
 from utils.train_utils import (
     run_eval,
     setup,
@@ -38,19 +37,6 @@ from utils.metrics import (
 )
 
 from src.telepath import TelepathConfig, Telepath
-
-parser = argparse.ArgumentParser(description="Train a model.")
-parser.add_argument("--run-project", type=str, required=True)
-parser.add_argument("--run-name", type=str, required=True)
-parser.add_argument("--run-group", type=str, required=True)
-parser.add_argument("--eval-first", action="store_true")
-parser.add_argument("--device", type=str)
-parser.add_argument("--training-config-path", type=str, default=None)
-parser.add_argument("--model-config-path", type=str, default=None)
-parser.add_argument("--world-size", type=int, default=1)
-parser.add_argument("--checkpoints", action="store_true", default=False)
-parser.add_argument("--reset-data-cache", action="store_true", default=False)
-parser.add_argument("--is-test-run", action="store_true", default=False)
 
 
 def main(
@@ -305,6 +291,19 @@ def main(
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train a model.")
+    parser.add_argument("--run-project", type=str, required=True)
+    parser.add_argument("--run-name", type=str, required=True)
+    parser.add_argument("--run-group", type=str, required=True)
+    parser.add_argument("--eval-first", action="store_true")
+    parser.add_argument("--device", type=str)
+    parser.add_argument("--training-config-path", type=str, default=None)
+    parser.add_argument("--model-config-path", type=str, default=None)
+    parser.add_argument("--world-size", type=int, default=1)
+    parser.add_argument("--checkpoints", action="store_true", default=False)
+    parser.add_argument("--reset-data-cache", action="store_true", default=False)
+    parser.add_argument("--is-test-run", action="store_true", default=False)
+
     args = parser.parse_args()
     if args.world_size == 1:
         main(rank=0, **vars(args))

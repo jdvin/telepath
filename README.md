@@ -19,7 +19,7 @@ In short, my thought process is the following:
     - [x] simese model definition
         - if we just use THINGS then we can pre-compute the text embeddings
     - [x] SigLIP Loss fn
-    - [ ] microbatch data swapping algorithm
+    - [x] microbatch data swapping algorithm
         - mbs are n_mb neu-text pairs
         - texts are swapped between devices
             - can just be indexes into the precomputed text emb matrix

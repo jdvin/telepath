@@ -301,22 +301,6 @@ METRICS = {
         tensor([0.0]),
         log_every_step=False,
     ),
-    MetricKey.VAL_ACCURACY: Metric(
-        None,
-        MetricType.GENERATION,
-        False,
-        transform_fn=identity,
-        reduce_fn=all_gather_append,
-        compute_fn=get_accuracy,
-    ),
-    MetricKey.VAL_GENERATIONS: Metric(
-        None,
-        MetricType.GENERATION,
-        False,
-        transform_fn=identity,
-        reduce_fn=all_gather_append,
-        compute_fn=construct_table,
-    ),
 }
 
 
