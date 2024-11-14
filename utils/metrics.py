@@ -1,6 +1,6 @@
 from collections import defaultdict
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from enum import Enum
 from typing import Any, Callable, Mapping
 
@@ -185,6 +185,7 @@ class Metric:
         reset_rule: Defines when the metric should be set to the intial state. If no reset is desired, set to MetricResetRule.MANUAL.
     """
 
+    name: str
     state: Tensor | int | float | list | None = None
     metric_type: MetricType = MetricType.STATE
     log_every_step: bool = True
@@ -199,6 +200,7 @@ class Metric:
     is_distributed: bool = False
 
     def __post_init__(self):
+        self.is_distributed = self.world_size > 1
         if isinstance(self.state, Tensor):
             self.state = self.state.to(self.device)
         self._default_state = deepcopy(self.state)
@@ -207,7 +209,7 @@ class Metric:
     def value(self) -> Any:
         assert self.state is not None
         if isinstance(self.state, Tensor) and self.is_distributed:
-            self.state = self.reduce_fn(self.state, torch.distributed.get_world_size())
+            self.state = self.reduce_fn(self.state, self.world_size)
         return self.compute_fn(self.state)
 
     def update(self, inference_artefacts: InferenceArtefacts) -> None:
@@ -238,73 +240,83 @@ class Metric:
     def reset(self) -> None:
         self.state = deepcopy(self._default_state)
 
-    def clone(self, device: str | int, world_size: int) -> "Metric":
-        cln = deepcopy(self)
-        cln.device = device
-        cln.world_size = world_size
-        cln.is_distributed = world_size > 1
-        cln.__post_init__()
-        return cln
 
+@dataclass
+class MetricManager:
+    def __init__(self, device, world_size, is_main_process, log_interval):
+        self.is_main_process = is_main_process
+        self.log_interval = log_interval
+        self.train_loss = Metric(
+            "train/loss", torch.tensor([0.0]), device=device, world_size=world_size
+        )
+        self.train_gradnorm = Metric(
+            "train/gradnorm", tensor([0.0]), device=device, world_size=world_size
+        )
+        self.microstep = Metric(
+            "train/microstep",
+            1,
+            reset_rule=MetricResetRule.MANUAL,
+            device=device,
+            world_size=world_size,
+        )
+        self.step = Metric(
+            "train/step",
+            1,
+            reset_rule=MetricResetRule.MANUAL,
+            device=device,
+            world_size=world_size,
+        )
+        self.epoch_microstep = Metric(
+            "train/epoch microstep",
+            1,
+            transform_fn=position_in_cycle,
+            accum_fn=replace,
+            reset_rule=MetricResetRule.MANUAL,
+            device=device,
+            world_size=world_size,
+        )
+        self.epoch_step = Metric(
+            "train/epoch step",
+            1,
+            transform_fn=position_in_cycle,
+            accum_fn=replace,
+            reset_rule=MetricResetRule.MANUAL,
+            device=device,
+            world_size=world_size,
+        )
+        self.lr = Metric(
+            "train/lr",
+            0,
+            accum_fn=replace,
+            reset_rule=MetricResetRule.MANUAL,
+            device=device,
+            world_size=world_size,
+        )
+        self.epoch = Metric(
+            "train/epoch",
+            1,
+            reset_rule=MetricResetRule.MANUAL,
+            device=device,
+            world_size=world_size,
+        )
+        self.val_loss = Metric(
+            "val/loss",
+            tensor([0.0]),
+            log_every_step=False,
+            device=device,
+            world_size=world_size,
+        )
 
-class MetricKey(Enum):
-    TRAIN_LOSS = "train_loss"
-    TRAIN_GRADNORM = "train_gradnorm"
-    MICROSTEP = "microstep"
-    STEP = "step"
-    EPOCHSTEP = "epochstep"
-    EPOCHMICROSTEP = "epochmicrostep"
-    LR = "lr"
-    EPOCH = "epoch"
-    VAL_LOSS = "val_loss"
-    VAL_ACCURACY = "val_accuracy"
-    VAL_GENERATIONS = "val_generations"
+    def log(self):
+        if not self.step.value % self.log_interval == 0:
+            return
 
+        for key, metric in asdict(self).items():
+            if not isinstance(metric, Metric):
+                continue
 
-METRICS = {
-    MetricKey.TRAIN_LOSS: Metric(
-        torch.tensor([0.0]),
-    ),
-    MetricKey.TRAIN_GRADNORM: Metric(
-        tensor([0.0]),
-    ),
-    MetricKey.MICROSTEP: Metric(
-        1,
-        reset_rule=MetricResetRule.MANUAL,
-    ),
-    MetricKey.STEP: Metric(
-        1,
-        reset_rule=MetricResetRule.MANUAL,
-    ),
-    MetricKey.EPOCHSTEP: Metric(
-        1,
-        transform_fn=position_in_cycle,
-        accum_fn=replace,
-        reset_rule=MetricResetRule.MANUAL,
-    ),
-    MetricKey.EPOCHMICROSTEP: Metric(
-        1,
-        transform_fn=position_in_cycle,
-        accum_fn=replace,
-        reset_rule=MetricResetRule.MANUAL,
-    ),
-    MetricKey.LR: Metric(
-        0,
-        accum_fn=replace,
-        reset_rule=MetricResetRule.MANUAL,
-    ),
-    MetricKey.EPOCH: Metric(
-        1,
-        reset_rule=MetricResetRule.MANUAL,
-    ),
-    MetricKey.VAL_LOSS: Metric(
-        tensor([0.0]),
-        log_every_step=False,
-    ),
-}
+            if metric.log_every_step:
+                metric.log(key)
 
-
-def get_metrics(
-    keys: list[MetricKey], device: str | int, world_size: int
-) -> dict[str, Metric]:
-    return {key.value: METRICS[key].clone(device, world_size) for key in keys}
+        if self.is_main_process:
+            wandb.log({}, commit=True)

@@ -699,7 +699,7 @@ class TelepathTrainer(nn.Module):
         text_proj = self.text_projection(text_enc)
         text_proj = F.normalize(text_proj, dim=-1)
         global_batch_text_projs = torch.zeros(
-            B * self.ws, self.d_model, device=self.rank, dtype=text_proj.device
+            B * self.ws, self.d_model, device=self.rank, dtype=text_proj.dtype
         )
         all_gather_into_tensor(global_batch_text_projs, text_proj)
         loss = torch.zeros(1)

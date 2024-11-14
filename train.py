@@ -31,9 +31,7 @@ from utils.train_utils import (
 )
 
 from utils.metrics import (
-    MetricKey,
-    get_metrics,
-    Metric,
+    MetricManager,
 )
 
 from src.telepath import TelepathConfig, TelepathTrainer
@@ -156,34 +154,23 @@ def main(
         weight_decay=cfg.weight_decay,
         warmup_frac=cfg.warmup_frac,
     )
-    metrics: dict[str, Metric] = get_metrics(
-        [
-            MetricKey.TRAIN_LOSS,
-            MetricKey.TRAIN_GRADNORM,
-            MetricKey.MICROSTEP,
-            MetricKey.STEP,
-            MetricKey.EPOCHSTEP,
-            MetricKey.EPOCHMICROSTEP,
-            MetricKey.LR,
-            MetricKey.EPOCH,
-            MetricKey.VAL_LOSS,
-            MetricKey.VAL_ACCURACY,
-            MetricKey.VAL_GENERATIONS,
-        ],
+    metrics = MetricManager(
         device=rank,
         world_size=world_size,
+        is_main_process=is_main_process,
+        log_interval=cfg.log_interval,
     )
 
-    metrics["lr"].update(lr_scheduler.get_last_lr()[0])
+    metrics.lr.update(lr_scheduler.get_last_lr()[0])
     logger.info("Spinning Dataloader.")
     train_dataloader_iterator = get_dataloader_iterator(
-        train_dataloader, train_sampler, metrics["epoch"].value  # type: ignore
+        train_dataloader, train_sampler, metrics.epoch.value  # type: ignore
     )
     micro_batch = get_microbatch(train_dataloader_iterator, rank)
     logger.info("Beginning Training.")
     train_pbar = tqdm(
         total=steps_per_epoch,
-        desc=f"Epoch {metrics['epoch'].value}/{cfg.num_epochs}.",
+        desc=f"Epoch {metrics.epoch.value}/{cfg.num_epochs}.",
         leave=False,
         disable=rank not in {0, "cuda:0", "cuda"},
     )
@@ -196,10 +183,9 @@ def main(
             device=rank,
         )
     while True:
-        is_accumulating = metrics[
-            "microstep"
-        ].value % grad_accum_steps != 0 and metrics["epochmicrostep"].value != len(
-            train_dataloader
+        is_accumulating = (
+            metrics.microstep.value % grad_accum_steps != 0
+            and metrics.epoch_microstep.value != len(train_dataloader)
         )
         # Forward and backward pass.
         # Do no sync gradients whilst accumulating.
@@ -211,10 +197,10 @@ def main(
             with scaler_context:
                 _, _, loss = model.module.step(micro_batch)
                 loss = loss / grad_accum_steps
-            metrics["train_loss"].update(loss.item())
+            metrics.train_loss.update(loss.item())
             # Get the next batch straight away without blocking whilst we compute the backward pass,
             # unless we are at the end of the epoch.
-            if metrics["epochmicrostep"].value < len(train_dataloader) - 1:
+            if metrics.epoch_microstep.value < len(train_dataloader) - 1:
                 micro_batch = get_microbatch(train_dataloader_iterator, rank)
             scaler.scale(loss).backward(retain_graph=True)  # type: ignore
 
@@ -222,14 +208,14 @@ def main(
         # break
         # If we are still accumulating gradients then skip gradient application and logging.
         if is_accumulating:
-            metrics["microstep"].update(1)
-            metrics["epochmicrostep"].update(
-                (metrics["microstep"].value, len(train_dataloader))
+            metrics.microstep.update(1)
+            metrics.epoch_microstep.update(
+                (metrics.microstep.value, len(train_dataloader))
             )
             continue
         if cfg.grad_clip > 0:
             scaler.unscale_(optim)
-            metrics["train_gradnorm"].update(
+            metrics.train_gradnorm.update(
                 nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             )
         # Gradient application and logging.
@@ -238,7 +224,7 @@ def main(
         optim.zero_grad(set_to_none=True)
         lr_scheduler.step()
         train_pbar.update()
-        if metrics["epochstep"].value in validation_step_indexes:
+        if metrics.epoch_step.value in validation_step_indexes:
             run_eval(
                 model=model.module,
                 val_dataloader=val_dataloader,
@@ -247,42 +233,35 @@ def main(
                 device=rank,
             )
 
-        if metrics["step"].value % cfg.log_interval == 0:
-            for key, metric in metrics.items():
-                if metric.log_every_step:
-                    metric.log(key)
-            if is_main_process:
-                wandb.log({}, commit=True)
-        if metrics["epochmicrostep"].value == len(train_dataloader):
+        metrics.log()
+        if metrics.epoch_microstep.value == len(train_dataloader):
             if is_main_process and checkpoints:
                 torch.save(
                     model.module,
                     f"checkpoints/{run_name}/{cfg.run_project}_{cfg.run_group}_{cfg.run_name}_ep{metrics['epoch'].value}.pt",
                 )
-            metrics["epoch"].update(1)
+            metrics.epoch.update(1)
             train_pbar = tqdm(
                 total=steps_per_epoch,
-                desc=f"Epoch: {metrics['epoch'].value}/{cfg.num_epochs}.",
+                desc=f"Epoch: {metrics.epoch.value}/{cfg.num_epochs}.",
                 leave=False,
                 disable=rank not in {0, "cuda:0", "cuda"},
             )
             train_dataloader_iterator = get_dataloader_iterator(
-                train_dataloader, train_sampler, metrics["epoch"].value
+                train_dataloader, train_sampler, metrics.epoch.value
             )
             # Get the first microbatch of the new epoch.
             micro_batch = get_microbatch(train_dataloader_iterator, rank)
 
-        if metrics["epoch"].value == cfg.num_epochs + 1:
+        if metrics.epoch.value == cfg.num_epochs + 1:
             logger.info("Training complete.")
             break
-        metrics["step"].update(1)
-        metrics["microstep"].update(1)
+        metrics.step.update(1)
+        metrics.microstep.update(1)
 
-        metrics["epochstep"].update((metrics["step"].value, steps_per_epoch))
-        metrics["epochmicrostep"].update(
-            (metrics["microstep"].value, len(train_dataloader))
-        )
-        metrics["lr"].update(lr_scheduler.get_last_lr()[0])
+        metrics.epoch_step.update((metrics.step.value, steps_per_epoch))
+        metrics.epoch_microstep.update((metrics.microstep.value, len(train_dataloader)))
+        metrics.lr.update(lr_scheduler.get_last_lr()[0])
     cleanup(world_size)
 
 
