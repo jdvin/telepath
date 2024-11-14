@@ -36,7 +36,7 @@ from utils.metrics import (
     Metric,
 )
 
-from src.telepath import TelepathConfig, Telepath
+from src.telepath import TelepathConfig, TelepathTrainer
 
 
 def main(
@@ -84,7 +84,7 @@ def main(
     logger.info("Creating model instance.")
     # Create model.
     model_config = TelepathConfig(**load_yaml(model_config_path))
-    model: Telepath = Telepath(model_config)
+    model: TelepathTrainer = TelepathTrainer(model_config, rank, world_size)
 
     torch_dtype = {
         "fp32": torch.float32,
@@ -93,10 +93,6 @@ def main(
     }[cfg.dtype]
 
     model.to(rank, dtype=torch_dtype)
-    assert isinstance(model, Telepath)
-    assert not isinstance(model.module.configure_optimizers, torch.Tensor)
-    assert isinstance(model.module, nn.Module)
-    log_model_details(model.module)
     if world_size > 1:
         model = DDP(model, device_ids=[rank])  # type: ignore
     logger.info(f"Loading dataset from {cfg.dataset_path}.")
