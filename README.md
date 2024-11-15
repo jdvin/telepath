@@ -23,6 +23,9 @@ In short, my thought process is the following:
         - mbs are n_mb neu-text pairs
         - texts are swapped between devices
             - can just be indexes into the precomputed text emb matrix
+- [ ] Contrastive data handling
+    - we have multiple presentations per object, but we cannot have two presentations of the same objects 
+    be in the same batch.
 - [ ] new val metrics
     - accuracy @ n 
 - [ ] add THINGS-EEG data (50ms)
