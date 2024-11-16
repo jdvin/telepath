@@ -15,7 +15,7 @@ import yaml
 
 from src.telepath import Telepath, TelepathConfig
 
-from utils.metrics import Metric, MetricType
+from utils.metrics import MetricManager
 
 
 @dataclass
@@ -231,7 +231,7 @@ def run_eval(
     model: Telepath,
     val_dataloader: DataLoader,
     val_sampler: Sampler | None,
-    metrics: dict[str, Metric],
+    metrics: MetricManager,
     device: str | int,
 ):
     """Run evaluation on the validation sets."""
@@ -243,36 +243,18 @@ def run_eval(
         disable=device not in {0, "cuda:0", "cuda"},
     )
     val_dataloader_iterator = get_dataloader_iterator(
-        val_dataloader, val_sampler, metrics["epoch"].value
+        val_dataloader, val_sampler, metrics.epoch.value
     )
-    # Accumulate losses, logits, and labels for all batches in the validation set.
-    # More memory efficient to accumulate as we go, but if we perform the calculation at the end,
-    # then it is more mathematically correct and we can more easily calculate metrics across all labels in the val set.
-    losses = []
-    generations = defaultdict(list)
+    loss = torch.tensor([0])
     for _ in range(len(val_dataloader)):
         micro_batch = get_microbatch(val_dataloader_iterator, device)
-
-        enc, _, loss = model.step(micro_batch)
-        generated_ids: list[list[int]] = model.module.generate(enc=enc, device=device)
-        generations["predictions"].extend(
-            model.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
-        )
-        generations["targets"].extend(
-            model.tokenizer.batch_decode(
-                micro_batch["input_ids"], skip_special_tokens=True
-            )
-        )
-
-        losses.append(loss)
+        loss, logits, labels = model.step(micro_batch)
+        loss += loss / len(val_dataloader)
 
         val_pbar.update()
-    metrics["val_generations"].update(generations)
-    metrics["val_generations"].log(f"val_generation-step{metrics['step'].value}")
-    metrics["val_accuracy"].update(generations)
-    metrics["val_accuracy"].log("val_accuracy")
+        metrics.val_accuracy.update({"logits": logits, "labels": labels})
+    metrics.val_accuracy.log()
 
-    losses = torch.tensor(losses)
-    metrics["val_loss"].update(losses.mean().item())
-    metrics["val_loss"].log("val_loss")
+    metrics.val_loss.update(loss)
+    metrics.val_loss.log()
     model.train()

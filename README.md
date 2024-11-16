@@ -15,7 +15,7 @@ In short, my thought process is the following:
         - Keep linear proj.
         - Use RMS norm.
         - shift (but not scale) to t=0 before projection.
-- [ ] SLINP-Telepath
+- [x] SLINP-Telepath
     - [x] simese model definition
         - if we just use THINGS then we can pre-compute the text embeddings
     - [x] SigLIP Loss fn
@@ -23,11 +23,11 @@ In short, my thought process is the following:
         - mbs are n_mb neu-text pairs
         - texts are swapped between devices
             - can just be indexes into the precomputed text emb matrix
-- [ ] Contrastive data handling
+- [x] Contrastive data handling
     - we have multiple presentations per object, but we cannot have two presentations of the same objects 
     be in the same batch.
         - or could we just have multiple +1 items in the loss fn?
-- [ ] new val metrics
+- [x] new val metrics
     - accuracy @ n 
 - [ ] add THINGS-EEG data (50ms)
     - add shift for forward so that epoch always begins at constant point

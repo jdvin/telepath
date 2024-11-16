@@ -698,28 +698,25 @@ class TelepathTrainer(nn.Module):
             )
         text_proj = self.text_projection(text_enc)
         text_proj = F.normalize(text_proj, dim=-1)
-        global_batch_text_projs = torch.zeros(
+        all_text_projs = torch.zeros(
             B * self.ws, self.d_model, device=self.rank, dtype=text_proj.dtype
         )
-        all_gather_into_tensor(global_batch_text_projs, text_proj)
+        all_gather_into_tensor(all_text_projs, text_proj)
+        # TODO: Almost certainly more efficient to just match the ids...
+        labels = 2 * ((all_text_projs @ all_text_projs.T) > 0.99).int() - 1
+        logits = torch.empty(0, self.d_model)
         loss = torch.zeros(1)
         for i in range(self.world_size):
-            loss += (
-                self.sigmoid_loss(
-                    eeg_proj,
-                    global_batch_text_projs[i * B : i * B + B],
-                    on_diag=i == self.rank,
-                )
-                / self.world_size
-            )
-        return eeg_proj, text_proj, loss
+            text_proj = all_text_projs[self.rank : self.rank + B, i * B : i * B + B]
+            labels_i = labels[self.rank : self.rank + B, i * B : i * B + B]
+            logits_i = eeg_proj @ labels_i.T
+            loss += self.sigmoid_loss(logits_i, labels_i) / self.world_size
+            logits = torch.concat([logits, logits_i])
 
-    def sigmoid_loss(self, eeg_proj, text_proj, on_diag: bool) -> Tensor:
-        xy = eeg_proj @ text_proj.T
-        z = torch.full_like(xy, -1)
-        if on_diag:
-            z.fill_diagonal_(1)
-        return F.sigmoid(z * (-self.t * xy + self.b)).mean()
+        return loss, logits, labels
+
+    def sigmoid_loss(self, logits: Tensor, labels: Tensor) -> Tensor:
+        return -F.sigmoid(labels * (-self.t * logits + self.b)).mean()
 
 
 class TelepathGenerator(nn.Module):

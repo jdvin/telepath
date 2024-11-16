@@ -51,7 +51,8 @@ Plottable = list[tuple[float, float]]
 MetricState = int | float | Tensor | list | dict | None
 # TODO: Should this be dataclass with explicit possible values?
 InferenceArtefacts = (
-    Mapping[str, Tensor | float | int | list[str]]
+    Mapping[str, Tensor]
+    | Mapping[str, float | int | list[str]]
     | tuple[Tensor | float | int, ...]
     | list[str]
     | Tensor
@@ -130,7 +131,7 @@ def flatten_ranks(root: list[dict[str, list[Any]]]) -> dict[str, list[Any]]:
     return out
 
 
-def get_accuracy(generations: list[dict[str, list[str]]]) -> float:
+def get_accuracy_generations(generations: list[dict[str, list[str]]]) -> float:
     """Slightly less naiive accuracy calculation."""
     accuracy = 0
 
@@ -151,6 +152,11 @@ def get_accuracy(generations: list[dict[str, list[str]]]) -> float:
         if target_text in pred_text or pred_text_is_synonym:
             accuracy += 1 / len(flattened_generations["predictions"])
     return accuracy
+
+
+def get_accuracy(out: Mapping[str, Tensor]) -> Tensor:
+    logits, labels = out["logits"], out["labels"]
+    return (labels[range(labels.shape[0]), logits.argmax(dim=1)] == 1).mean()
 
 
 def construct_table(
@@ -221,17 +227,13 @@ class Metric:
                 self.transform_fn(inference_artefacts),
             )
 
-    def log(self, key: str) -> None:
+    def log(self) -> None:
         value = self.value
         if self.device in (0, "cuda", "cuda:0", "cpu", "mps"):
             if isinstance(value, Tensor):
                 value = value.item()
             wandb.log(
-                {
-                    key.replace("_", "/"): (
-                        plot.line(**value) if isinstance(value, dict) else value
-                    )
-                },
+                {key: (plot.line(**value) if isinstance(value, dict) else value)},
                 commit=False,
             )
         if self.reset_rule == MetricResetRule.ON_LOG:
@@ -243,7 +245,7 @@ class Metric:
 
 @dataclass
 class MetricManager:
-    def __init__(self, device, world_size, is_main_process, log_interval):
+    def __init__(self, device, world_size, batch_size, is_main_process, log_interval):
         self.is_main_process = is_main_process
         self.log_interval = log_interval
         self.train_loss = Metric(
@@ -302,6 +304,14 @@ class MetricManager:
         self.val_loss = Metric(
             "val/loss",
             tensor([0.0]),
+            log_every_step=False,
+            device=device,
+            world_size=world_size,
+        )
+        self.val_accuracy = Metric(
+            f"val/accuracy@{batch_size}",
+            tensor([0.0]),
+            transform_fn=get_accuracy,
             log_every_step=False,
             device=device,
             world_size=world_size,

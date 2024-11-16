@@ -195,7 +195,7 @@ def main(
         # torch.cuda.memory._record_memory_history()
         with ddp_context:
             with scaler_context:
-                _, _, loss = model.module.step(micro_batch)
+                loss, _, _ = model.module.step(micro_batch)
                 loss = loss / grad_accum_steps
             metrics.train_loss.update(loss.item())
             # Get the next batch straight away without blocking whilst we compute the backward pass,

@@ -90,67 +90,6 @@ ELECTRODE_ORDER = np.array(
 )
 
 
-@dataclass
-class ContrastiveShard:
-    """A shard of contrastive training data.
-
-    The largest group of epochs that can be used in a single batch, to avoid
-    duplicate objects being contrasted.
-    """
-
-    object_ids: set[str]
-    is_val: bool
-    idx: int
-    n_objects: int
-    n_channels: int
-    epoch_len: int
-    root_dir: str
-
-    def __post_init__(self):
-        self.data = np.memmap(
-            dtype=np.float32,
-            filename=os.path.join(
-                self.root_dir,
-                f"{'val' if self.is_val else 'train'}-{self.idx}.npy",
-            ),
-            mode="w+",
-            shape=(self.n_objects, self.n_channels, self.epoch_len),
-        )
-
-
-class TelepathContrastiveDataset(Dataset):
-    def __init__(
-        self,
-        root_dir: str,
-        subjects: list[int],
-        is_val: bool,
-        epoch_start: int = -200,
-        epoch_end: int = 200,
-    ):
-        self.epoch_length = epoch_end - epoch_start
-        # Keys are coded: `{split_type}_img_concepts_THINGS`.
-        # Values are coded arrays of strings each coded: `{index}_{object_id}`.
-        # The index is offset by +1 relative to THINGS probably because `0` is used as padding in the stim channel.
-        eeg_img_metadata = {
-            key.split("_")[0]: [float(obj.split("_")[0]) - 1 for obj in value]
-            for key, value in np.load(
-                f"{root_dir}/image_metadata.npy", allow_pickle=True
-            )
-            .all()
-            .items()
-            if "THINGS" in key
-        }
-
-    def __len__(self):
-        pass
-
-    def __getitem__(self, index: int) -> dict[str, Tensor]:
-        pass
-
-    def __getitems__(self, indices: list[int]) -> dict[str, Tensor]:
-        pass
-
-
 def extract_things_100ms_ds(
     root_dir: str,
     subjects: list[int] | range,
