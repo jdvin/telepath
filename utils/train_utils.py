@@ -13,7 +13,7 @@ import numpy as np
 import wandb
 import yaml
 
-from src.telepath import Telepath, TelepathConfig
+from src.telepath import TelepathTrainer, TelepathConfig
 
 from utils.metrics import MetricManager
 
@@ -228,7 +228,7 @@ def get_dataloader_iterator(
 
 @torch.no_grad()
 def run_eval(
-    model: Telepath,
+    model: TelepathTrainer,
     val_dataloader: DataLoader,
     val_sampler: Sampler | None,
     metrics: MetricManager,

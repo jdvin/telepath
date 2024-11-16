@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import List, Sequence, Iterable
 import math
 import numpy as np
 import torch
@@ -18,10 +17,7 @@ from .components.activations import GEGLU
 
 from transformers import (
     AutoTokenizer,
-    WhisperModel,
-    WhisperConfig,
     T5ForConditionalGeneration,
-    T5Config,
 )
 
 
@@ -117,7 +113,6 @@ T5_DECODER_PARAM_MAP = ParamMap(
 class TelepathConfig:
     n_eeg_channels: int
     text_encoder_pretrained_model: str | None
-    text_encoder_start_sequence: Tensor = tensor([1484, 9709, 7314, 10])
     text_encoder_stop_token: int = 0
     text_encoder_vocab_size: int = 0
     neural_encoder_block_size: int = 0

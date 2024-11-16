@@ -1,6 +1,13 @@
 n_eeg_channels: 63
-encoder_block_size: 400
-decoder_block_size: 15
-encoder_pretrained_model: openai/whisper-medium.en
-decoder_pretrained_model: google/t5-v1_1-large
-fft_hop_length: 2
+text_encoder_pretrained_model: google/t5-v1_1-large
+neural_encoder_block_size: 400
+text_encoder_block_size: 10
+d_model: 1024
+neural_encoder_d_mlp: 4096
+text_encoder_d_mlp: 4096
+n_heads: 16
+neural_encoder_n_layers: 24
+text_encoder_n_layers: 24
+dropout: 0.1
+cache_text_embeddings: True
+

@@ -12,7 +12,6 @@ from torch.amp.autocast_mode import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
 from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm import tqdm
-import wandb
 from utils.data_utils import extract_things_100ms_ds, get_collate_fn
 
 # from pytorch_memlab import MemReporter
@@ -78,7 +77,7 @@ def main(
         model_config=model_config,
     )
     rank = rank if world_size > 1 else device
-    is_main_process = rank in {"cuda:0", "cuda", 0, "cpu", "mps"}
+    is_main_process = rank in {"cuda:0", "cuda", 0, "cpu", "mps"} or world_size == 1
     logger.info("Creating model instance.")
     # Create model.
     model_config = TelepathConfig(**load_yaml(model_config_path))
@@ -104,12 +103,9 @@ def main(
             reset_cache=reset_data_cache,
             is_test_run=is_test_run,
         )
-    if world_size > 1:
+    else:
         dist.barrier()
-        if rank != 0:
-            ds = extract_things_100ms_ds(
-                root_dir=cfg.dataset_path, subjects=cfg.subjects
-            )
+        ds = extract_things_100ms_ds(root_dir=cfg.dataset_path, subjects=cfg.subjects)
     collate_fn = get_collate_fn(
         model.module.tokenizer,
         model.module.start_sequence,
@@ -159,6 +155,7 @@ def main(
         world_size=world_size,
         is_main_process=is_main_process,
         log_interval=cfg.log_interval,
+        batch_size=cfg.batch_size,
     )
 
     metrics.lr.update(lr_scheduler.get_last_lr()[0])
