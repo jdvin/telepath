@@ -12,6 +12,7 @@ from torch.amp.autocast_mode import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
 from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm import tqdm
+import pandas as pd
 from utils.data_utils import extract_things_100ms_ds, get_collate_fn
 
 # from pytorch_memlab import MemReporter
@@ -103,6 +104,11 @@ def main(
             reset_cache=reset_data_cache,
             is_test_run=is_test_run,
         )
+        if model_config.cache_text_embeddings:
+            vocab = pd.read_csv(f"{cfg.dataset_path}/things_concepts.csv")[
+                "Word"
+            ].tolist()
+            model.compute_text_embedding_cache(vocab)
     else:
         dist.barrier()
         ds = extract_things_100ms_ds(root_dir=cfg.dataset_path, subjects=cfg.subjects)

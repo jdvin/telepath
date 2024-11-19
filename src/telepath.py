@@ -660,19 +660,27 @@ class TelepathTrainer(nn.Module):
     def t(self):
         return torch.exp(self.t_prime)
 
-    def compute_text_embedding_cache(self, vocabulary: list[list[int]]) -> None:
-        self.text_embedding_cache = {
-            str(token_ids): self.text_encoder(
-                torch.tensor(token_ids).to(self.text_encoder.device)
-            )
-            for token_ids in vocabulary
-        }
+    def compute_text_embedding_cache(self, vocabulary: list[str]) -> None:
+        tok = AutoTokenizer.from_pretrained(self.config.text_encoder_pretrained_model)
+        text_embedding = torch.cat(
+            [self.text_encoder(tok(obj, return_tensors="pt")) for obj in vocabulary]
+        )
+        self.text_embedding_cache = nn.Embedding.from_pretrained(
+            text_embedding, freeze=True
+        )
+        del self.text_encoder
+        torch.cuda.empty_cache()
 
     def step(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor, Tensor]:
         (
             eeg,
             token_ids,
-        ) = (batch["input_features"], batch["input_ids"])
+            object_ids,
+        ) = (
+            batch["input_features"],
+            batch["input_ids"],
+            batch["object_ids"],
+        )
         B = eeg.shape[0]
         eeg_enc = masked_mean_reduce(
             self.neural_encoder(eeg),
@@ -681,10 +689,7 @@ class TelepathTrainer(nn.Module):
         eeg_proj = self.neural_projection(eeg_enc)
         eeg_proj = F.normalize(eeg_proj, dim=-1)
         if self.cache_text_embeddings:
-            # TODO: Make this less stupid. Maybe nn.Embeddings?
-            text_enc = torch.concat(
-                [self.text_embedding_cache[str(item.tolist())] for item in token_ids]
-            ).to(self.eeg_proj.device)
+            text_enc = self.text_embedding_cache(object_ids).to(self.eeg_proj.device)
         else:
             padding_mask = (token_ids != self.pad_token_id).to(torch.long)
             text_enc = masked_mean_reduce(

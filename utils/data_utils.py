@@ -282,9 +282,12 @@ def get_collate_fn(
     ) -> dict[str, torch.Tensor]:
         batch_size = len(samples)
         object_words = []
+        object_ids = []
         eeg_features = []
         for sample in samples:
-            object_words.append(things_concepts["Word"][sample[0][0]])
+            object_id = things_concepts["Word"][sample[0][0]]
+            object_words.append(object_id)
+            object_ids.append(object_id)
             # If `get_spectrogram, sample is of shape (N_C, NF, T).
             # else, sampel is of shape (N_C, T)
             eeg_features.append(
@@ -318,6 +321,7 @@ def get_collate_fn(
 
         return {
             "input_features": torch.stack(eeg_features),
+            "object_ids": torch.tensor(object_ids),
             "input_ids": input_ids,
             "decoder_attention_mask": decoder_attention_mask,
         }
