@@ -108,7 +108,7 @@ def main(
             vocab = pd.read_csv(f"{cfg.dataset_path}/things_concepts.csv")[
                 "Word"
             ].tolist()
-            model.compute_text_embedding_cache(vocab)
+            model.module.compute_text_embedding_cache(vocab)
     else:
         dist.barrier()
         ds = extract_things_100ms_ds(root_dir=cfg.dataset_path, subjects=cfg.subjects)

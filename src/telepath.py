@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import math
 import numpy as np
 import torch
+from tqdm import tqdm
 from torch import nn, Tensor, tensor
 from torch.distributed import all_gather_into_tensor
 import torch.nn.functional as F
@@ -623,13 +624,27 @@ class TextDecoder(RelativePositionTransformer):
         return next(self.parameters()).device
 
 
-def masked_mean_reduce(tensor: Tensor, mask: Tensor) -> Tensor:
-    masked_tensor = tensor * mask.to(torch.int)
-    return masked_tensor.sum(dim=1) / mask.sum(dim=1)
+def masked_mean_reduce(t: Tensor, mask: Tensor) -> Tensor:
+    """Compute masked mean reduction along dim 1.
+
+    Args:
+        t: Input tensor of shape [B, N, D]
+        mask: Boolean mask of shape [B, N]
+    Returns:
+        Tensor of shape [B, D] containing masked means
+    """
+    # Expand mask to match tensor dimensions
+    expanded_mask = mask.unsqueeze(-1).expand_as(t)
+
+    # Apply mask and compute mean
+    masked_tensor = t * expanded_mask.to(t.dtype)
+    return masked_tensor.sum(dim=1) / mask.sum(dim=1, keepdim=True)
 
 
 class TelepathTrainer(nn.Module):
     def __init__(self, config: TelepathConfig, rank: int, world_size: int):
+        super().__init__()
+        self.config = config
         self.neural_encoder = NeuralEncoder(
             n_input_channels=config.n_eeg_channels,
             block_size=config.neural_encoder_block_size,
@@ -646,10 +661,7 @@ class TelepathTrainer(nn.Module):
         self.text_projection = nn.Linear(config.d_model, config.d_model)
 
         self.t_prime = nn.Parameter(torch.tensor(math.log(10)))
-        self.b = nn.Parameter(torch.tensor(-10))
-
-        if config.cache_text_embeddings:
-            self.text_embeddings_cache: dict[str, Tensor] = {}
+        self.b = nn.Parameter(torch.tensor(-10.0))
 
         self.d_model = config.d_model
         self.pad_token_id = config.text_encoder_stop_token
@@ -662,6 +674,20 @@ class TelepathTrainer(nn.Module):
 
     def compute_text_embedding_cache(self, vocabulary: list[str]) -> None:
         tok = AutoTokenizer.from_pretrained(self.config.text_encoder_pretrained_model)
+        embeddings = []
+        for obj in tqdm(vocabulary, desc="Computing text embeddings."):
+            tokens = tok(obj, return_tensors="pt")
+            embeddings.append(
+                self.text_projection(
+                    masked_mean_reduce(
+                        self.text_encoder(
+                            tokens["input_ids"].to(self.text_encoder.device)
+                        ),
+                        tokens["attention_mask"].to(self.text_encoder.device),
+                    )
+                )
+            )
+
         text_embedding = torch.cat(
             [self.text_encoder(tok(obj, return_tensors="pt")) for obj in vocabulary]
         )
@@ -853,3 +879,26 @@ class TelepathGenerator(nn.Module):
             config, cross_attn=True, is_causal=True
         )
         return model
+
+    def optim_groups(self, weight_decay: float = 1e-1) -> list[dict[str, str]]:
+        # start with all of the candidate parameters
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        # filter out those that do not require grad
+        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
+        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+        optim_groups = [
+            {"params": decay_params, "weight_decay": weight_decay},
+            {"params": nodecay_params, "weight_decay": 0.0},
+        ]
+        num_decay_params = sum(p.numel() for p in decay_params)
+        num_nodecay_params = sum(p.numel() for p in nodecay_params)
+        print(
+            f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters"
+        )
+        print(
+            f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
+        )
+        return optim_groups

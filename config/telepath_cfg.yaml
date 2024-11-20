@@ -3,8 +3,9 @@ text_encoder_pretrained_model: google/t5-v1_1-large
 neural_encoder_block_size: 400
 text_encoder_block_size: 10
 d_model: 1024
-neural_encoder_d_mlp: 4096
-text_encoder_d_mlp: 4096
+neural_encoder_d_mlp: 3072
+text_encoder_d_mlp: 2816
+text_encoder_vocab_size: 32128
 n_heads: 16
 neural_encoder_n_layers: 24
 text_encoder_n_layers: 24
