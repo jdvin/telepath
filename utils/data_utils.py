@@ -261,10 +261,10 @@ def get_spectrogram(signal: torch.Tensor, n_fft: int, hop_length: int):
 
 def get_collate_fn(
     tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast,
-    start_token_id_sequence: Tensor,
     stop_token_id: int,
     pad_token_id: int,
     get_spectrogram: bool,
+    start_token_id_sequence: Tensor | None = None,
     n_fft: int | None = None,
     fft_hop_length: int | None = None,
     things_concepts_path: str = "data/things_concepts.csv",
@@ -285,9 +285,9 @@ def get_collate_fn(
         object_ids = []
         eeg_features = []
         for sample in samples:
-            object_id = things_concepts["Word"][sample[0][0]]
-            object_words.append(object_id)
+            object_id = sample[0][0]
             object_ids.append(object_id)
+            object_words.append(things_concepts["Word"][object_id])
             # If `get_spectrogram, sample is of shape (N_C, NF, T).
             # else, sampel is of shape (N_C, T)
             eeg_features.append(
@@ -310,12 +310,14 @@ def get_collate_fn(
         )
         attention_mask = tokenizer_out["attention_mask"]
         input_ids = tokenizer_out["input_ids"]
-        start_sequences = torch.tile(start_token_id_sequence, (batch_size, 1))
         assert isinstance(attention_mask, torch.Tensor)
         assert isinstance(input_ids, torch.Tensor)
-        decoder_attention_mask = torch.cat(
-            [torch.ones_like(start_sequences), attention_mask], dim=1
-        )
+        if start_token_id_sequence is not None:
+            start_sequences = torch.tile(start_token_id_sequence, (batch_size, 1))
+            input_ids = torch.cat([start_sequences, input_ids], dim=1)
+            attention_mask = torch.cat(
+                [torch.ones_like(start_sequences), attention_mask], dim=1
+            )
 
         assert isinstance(eeg_features, list)
 
@@ -323,7 +325,7 @@ def get_collate_fn(
             "input_features": torch.stack(eeg_features),
             "object_ids": torch.tensor(object_ids),
             "input_ids": input_ids,
-            "decoder_attention_mask": decoder_attention_mask,
+            "decoder_attention_mask": attention_mask,
         }
 
     return collate_fn

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import math
 import numpy as np
 import torch
+import pandas as pd
 from tqdm import tqdm
 from torch import nn, Tensor, tensor
 from torch.distributed import all_gather_into_tensor
@@ -20,6 +21,29 @@ from transformers import (
     AutoTokenizer,
     T5ForConditionalGeneration,
 )
+
+
+def configure_optimizers(
+    parameters,
+    num_batches: int,
+    max_lr: float,
+    weight_decay: float,
+    warmup_frac: float,
+):
+    optimizer = AdamW(
+        [p for p in parameters() if p.requires_grad],
+        lr=max_lr,
+        weight_decay=weight_decay,
+    )
+    warmup_batches = int(num_batches * warmup_frac)
+    warmup_scheduler = LinearLR(
+        optimizer, start_factor=1e-7, end_factor=1, total_iters=warmup_batches
+    )
+    decay_scheduler = CosineAnnealingLR(optimizer, T_max=num_batches)
+    scheduler = SequentialLR(
+        optimizer, [warmup_scheduler, decay_scheduler], milestones=[warmup_batches]
+    )
+    return optimizer, scheduler
 
 
 @dataclass
@@ -131,6 +155,7 @@ class TelepathConfig:
     neural_encoder_scale_exponent: float = -0.25
     train_text_encoder: bool = False
     cache_text_embeddings: bool = True
+    things_concepts_path: str = "data/things_concepts.csv"
 
     @classmethod
     def from_yaml(cls, path: str):
@@ -296,7 +321,6 @@ class NeuralEncoder(nn.Module):
         checkpoint_activations: bool = False,
     ):
         super().__init__()
-        self.pre_norm = RMSNorm(d_model)
         self.embed_positions = nn.Embedding(block_size, d_model)
         self.embed_positions.weight = nn.Parameter(sinusoids(block_size, d_model))
         self.sample_proj = nn.Linear(n_input_channels, d_model)
@@ -321,7 +345,8 @@ class NeuralEncoder(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         # (batch_size, n_eeg_channels, sequence_length)
         B, N_C, T = x.size()
-        x = self.sample_proj(self.pre_norm(x).transpose(-1, -2))
+        x = (x - x[:, :, T // 2].unsqueeze(-1)).transpose(-1, -2)
+        x = self.sample_proj(x)
         x = (x + self.embed_positions.weight[None, :, :]).to(x.dtype)
         if self.checkpoint_activations:
             x = checkpoint_sequential(
@@ -645,6 +670,20 @@ class TelepathTrainer(nn.Module):
     def __init__(self, config: TelepathConfig, rank: int, world_size: int):
         super().__init__()
         self.config = config
+        self.d_model = config.d_model
+        self.pad_token_id = config.text_encoder_stop_token
+        self.world_size = world_size
+        self.rank = rank
+        self.device = torch.device(f"cuda:{rank}")
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.config.text_encoder_pretrained_model
+        )
+
+        self.text_encoder = TextEncoder.from_pretrained(config)
+        if config.cache_text_embeddings:
+            self.text_encoder.to(rank)
+            self.compute_text_embedding_cache()
+
         self.neural_encoder = NeuralEncoder(
             n_input_channels=config.n_eeg_channels,
             block_size=config.neural_encoder_block_size,
@@ -656,43 +695,42 @@ class TelepathTrainer(nn.Module):
             scale_exponent=config.neural_encoder_scale_exponent,
         )
         self.neural_projection = nn.Linear(config.d_model, config.d_model)
-
-        self.text_encoder = TextEncoder.from_pretrained(config)
         self.text_projection = nn.Linear(config.d_model, config.d_model)
-
         self.t_prime = nn.Parameter(torch.tensor(math.log(10)))
         self.b = nn.Parameter(torch.tensor(-10.0))
-
-        self.d_model = config.d_model
-        self.pad_token_id = config.text_encoder_stop_token
-        self.world_size = world_size
-        self.rank = rank
 
     @property
     def t(self):
         return torch.exp(self.t_prime)
 
-    def compute_text_embedding_cache(self, vocabulary: list[str]) -> None:
-        tok = AutoTokenizer.from_pretrained(self.config.text_encoder_pretrained_model)
-        embeddings = []
-        for obj in tqdm(vocabulary, desc="Computing text embeddings."):
-            tokens = tok(obj, return_tensors="pt")
-            embeddings.append(
-                self.text_projection(
-                    masked_mean_reduce(
-                        self.text_encoder(
-                            tokens["input_ids"].to(self.text_encoder.device)
-                        ),
-                        tokens["attention_mask"].to(self.text_encoder.device),
-                    )
-                )
+    def compute_text_embedding_cache(self) -> None:
+        self.text_encoder.to(self.rank)
+        vocab = pd.read_csv(self.config.things_concepts_path)["Word"].tolist()
+        embeddings = torch.empty(
+            0, self.d_model, device=self.device, dtype=torch.float32
+        )
+        shard_size = math.ceil(len(vocab) / self.world_size)
+        shard_index = self.rank * shard_size
+        embeddings = torch.zeros(shard_size, self.d_model, device=self.device)
+        for i, obj in tqdm(
+            enumerate(vocab[shard_index : shard_index + shard_size]),
+            desc="Computing text embeddings.",
+        ):
+            tokens = self.tokenizer(obj, return_tensors="pt")
+            embeddings[i] = masked_mean_reduce(
+                self.text_encoder(tokens["input_ids"].to(self.device)),
+                tokens["attention_mask"].to(self.device),
             )
 
-        text_embedding = torch.cat(
-            [self.text_encoder(tok(obj, return_tensors="pt")) for obj in vocabulary]
+        all_text_embeddings = torch.empty(
+            shard_size * self.world_size,
+            self.d_model,
+            device=self.device,
+            dtype=torch.float32,
         )
+        all_gather_into_tensor(all_text_embeddings, embeddings)
         self.text_embedding_cache = nn.Embedding.from_pretrained(
-            text_embedding, freeze=True
+            all_text_embeddings, freeze=True
         )
         del self.text_encoder
         torch.cuda.empty_cache()
@@ -710,7 +748,7 @@ class TelepathTrainer(nn.Module):
         B = eeg.shape[0]
         eeg_enc = masked_mean_reduce(
             self.neural_encoder(eeg),
-            torch.ones(*eeg.shape[:1]),
+            torch.ones(*eeg.shape[:-1]),
         )
         eeg_proj = self.neural_projection(eeg_enc)
         eeg_proj = F.normalize(eeg_proj, dim=-1)
@@ -725,7 +763,7 @@ class TelepathTrainer(nn.Module):
         text_proj = self.text_projection(text_enc)
         text_proj = F.normalize(text_proj, dim=-1)
         all_text_projs = torch.zeros(
-            B * self.ws, self.d_model, device=self.rank, dtype=text_proj.dtype
+            B * self.world_size, self.d_model, device=self.device, dtype=text_proj.dtype
         )
         all_gather_into_tensor(all_text_projs, text_proj)
         # TODO: Almost certainly more efficient to just match the ids...
@@ -820,24 +858,6 @@ class TelepathGenerator(nn.Module):
         # Mask special tokens in the loss function, except for the first EOS token.
         loss = F.cross_entropy(logits, labels, ignore_index=-100)
         return enc, logits, loss
-
-    def configure_optimizers(
-        self, num_batches: int, max_lr: float, weight_decay: float, warmup_frac: float
-    ):
-        optimizer = AdamW(
-            [p for p in self.parameters() if p.requires_grad],
-            lr=max_lr,
-            weight_decay=weight_decay,
-        )
-        warmup_batches = int(num_batches * warmup_frac)
-        warmup_scheduler = LinearLR(
-            optimizer, start_factor=1e-7, end_factor=1, total_iters=warmup_batches
-        )
-        decay_scheduler = CosineAnnealingLR(optimizer, T_max=num_batches)
-        scheduler = SequentialLR(
-            optimizer, [warmup_scheduler, decay_scheduler], milestones=[warmup_batches]
-        )
-        return optimizer, scheduler
 
     @property
     def module(self):

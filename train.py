@@ -34,7 +34,7 @@ from utils.metrics import (
     MetricManager,
 )
 
-from src.telepath import TelepathConfig, TelepathTrainer
+from src.telepath import TelepathConfig, TelepathTrainer, configure_optimizers
 
 
 def main(
@@ -77,8 +77,7 @@ def main(
         training_config=cfg,
         model_config=model_config,
     )
-    rank = rank if world_size > 1 else device
-    is_main_process = rank in {"cuda:0", "cuda", 0, "cpu", "mps"} or world_size == 1
+    is_main_process = rank == 0
     logger.info("Creating model instance.")
     # Create model.
     model_config = TelepathConfig(**load_yaml(model_config_path))
@@ -104,19 +103,13 @@ def main(
             reset_cache=reset_data_cache,
             is_test_run=is_test_run,
         )
-        if model_config.cache_text_embeddings:
-            vocab = pd.read_csv(f"{cfg.dataset_path}/things_concepts.csv")[
-                "Word"
-            ].tolist()
-            model.module.compute_text_embedding_cache(vocab)
     else:
         dist.barrier()
         ds = extract_things_100ms_ds(root_dir=cfg.dataset_path, subjects=cfg.subjects)
     collate_fn = get_collate_fn(
         model.module.tokenizer,
-        model.module.start_sequence,
-        model.module.stop_token,
-        model.module.stop_token,
+        model_config.text_encoder_stop_token,
+        model_config.text_encoder_stop_token,
         get_spectrogram=False,
     )
     logger.info("Creating data loaders.")
@@ -150,7 +143,8 @@ def main(
 
     logger.info("Creating optimizer.")
 
-    optim, lr_scheduler = model.module.configure_optimizers(
+    optim, lr_scheduler = configure_optimizers(
+        model.module.parameters,
         num_batches=steps_per_epoch * cfg.num_epochs,
         max_lr=cfg.max_lr,
         weight_decay=cfg.weight_decay,
@@ -248,7 +242,7 @@ def main(
                 total=steps_per_epoch,
                 desc=f"Epoch: {metrics.epoch.value}/{cfg.num_epochs}.",
                 leave=False,
-                disable=rank not in {0, "cuda:0", "cuda"},
+                disable=not is_main_process,
             )
             train_dataloader_iterator = get_dataloader_iterator(
                 train_dataloader, train_sampler, metrics.epoch.value

@@ -29,6 +29,8 @@ In short, my thought process is the following:
         - or could we just have multiple +1 items in the loss fn?
 - [x] new val metrics
     - accuracy @ n 
+- [ ] Make Training Work Again!
+- [ ] Swap AdamW to SOAP
 - [ ] add THINGS-EEG data (50ms)
     - add shift for forward so that epoch always begins at constant point
 
