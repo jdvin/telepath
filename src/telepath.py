@@ -658,11 +658,12 @@ def masked_mean_reduce(t: Tensor, mask: Tensor) -> Tensor:
     Returns:
         Tensor of shape [B, D] containing masked means
     """
+    mask = mask.to(device=t.device, dtype=t.dtype)
     # Expand mask to match tensor dimensions
     expanded_mask = mask.unsqueeze(-1).expand_as(t)
 
     # Apply mask and compute mean
-    masked_tensor = t * expanded_mask.to(t.dtype)
+    masked_tensor = t * expanded_mask
     return masked_tensor.sum(dim=1) / mask.sum(dim=1, keepdim=True)
 
 
@@ -678,8 +679,8 @@ class TelepathTrainer(nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.config.text_encoder_pretrained_model
         )
-
         self.text_encoder = TextEncoder.from_pretrained(config)
+        self.cache_text_embeddings = config.cache_text_embeddings
         if config.cache_text_embeddings:
             self.text_encoder.to(rank)
             self.compute_text_embedding_cache()
@@ -745,15 +746,15 @@ class TelepathTrainer(nn.Module):
             batch["input_ids"],
             batch["object_ids"],
         )
-        B = eeg.shape[0]
+        B, N_C, T = eeg.shape
         eeg_enc = masked_mean_reduce(
             self.neural_encoder(eeg),
-            torch.ones(*eeg.shape[:-1]),
+            torch.ones(B, T),
         )
         eeg_proj = self.neural_projection(eeg_enc)
         eeg_proj = F.normalize(eeg_proj, dim=-1)
         if self.cache_text_embeddings:
-            text_enc = self.text_embedding_cache(object_ids).to(self.eeg_proj.device)
+            text_enc = self.text_embedding_cache(object_ids)
         else:
             padding_mask = (token_ids != self.pad_token_id).to(torch.long)
             text_enc = masked_mean_reduce(

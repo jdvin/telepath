@@ -323,7 +323,7 @@ def get_collate_fn(
 
         return {
             "input_features": torch.stack(eeg_features),
-            "object_ids": torch.tensor(object_ids),
+            "object_ids": torch.tensor(object_ids).to(torch.long),
             "input_ids": input_ids,
             "decoder_attention_mask": attention_mask,
         }
