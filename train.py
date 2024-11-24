@@ -103,6 +103,7 @@ def main(
             reset_cache=reset_data_cache,
             is_test_run=is_test_run,
         )
+        dist.barrier()
     else:
         dist.barrier()
         ds = extract_things_100ms_ds(root_dir=cfg.dataset_path, subjects=cfg.subjects)

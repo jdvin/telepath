@@ -102,7 +102,6 @@ def setup(
     if rank != 0:
         # Suppress output from all ranks except rank 0.
         logger.remove()
-        pass
     else:
         # Initialize checkpoints directory and wandb logging for the first rank.
         if checkpoints:
