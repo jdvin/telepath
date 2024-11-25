@@ -704,6 +704,7 @@ class TelepathTrainer(nn.Module):
     def t(self):
         return torch.exp(self.t_prime)
 
+    @torch.no_grad()
     def compute_text_embedding_cache(self) -> None:
         self.text_encoder.to(self.rank)
         vocab = pd.read_csv(self.config.things_concepts_path)["Word"].tolist()

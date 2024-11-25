@@ -15,7 +15,7 @@ from tqdm import tqdm
 import pandas as pd
 from utils.data_utils import extract_things_100ms_ds, get_collate_fn
 
-# from pytorch_memlab import MemReporter
+from pytorch_memlab import MemReporter
 
 from utils.train_utils import (
     run_eval,
@@ -82,7 +82,8 @@ def main(
     # Create model.
     model_config = TelepathConfig(**load_yaml(model_config_path))
     model: TelepathTrainer = TelepathTrainer(model_config, rank, world_size)
-
+    logger.debug("====Post Init====")
+    reporter.report()
     torch_dtype = {
         "fp32": torch.float32,
         "fp16": torch.float16,
@@ -90,6 +91,7 @@ def main(
     }[cfg.dtype]
 
     model.to(rank, dtype=torch_dtype)
+    reporter = MemReporter(model)
     if world_size > 1:
         model = DDP(model, device_ids=[rank])  # type: ignore
     logger.info(f"Loading dataset from {cfg.dataset_path}.")
@@ -194,6 +196,8 @@ def main(
         with ddp_context:
             with scaler_context:
                 loss, _, _ = model.module.step(micro_batch)
+                logger.debug("====Forward Pass====")
+                reporter.report()
                 loss = loss / grad_accum_steps
             metrics.train_loss.update(loss.item())
             # Get the next batch straight away without blocking whilst we compute the backward pass,
