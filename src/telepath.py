@@ -689,7 +689,7 @@ class TelepathTrainer(nn.Module):
             n_input_channels=config.n_eeg_channels,
             block_size=config.neural_encoder_block_size,
             d_model=config.d_model,
-            d_mlp=4 * config.d_model,
+            d_mlp=config.neural_encoder_d_mlp,
             n_heads=config.n_heads,
             n_layers=config.neural_encoder_n_layers,
             dropout=config.dropout,

@@ -82,8 +82,7 @@ def main(
     # Create model.
     model_config = TelepathConfig(**load_yaml(model_config_path))
     model: TelepathTrainer = TelepathTrainer(model_config, rank, world_size)
-    logger.debug("====Post Init====")
-    reporter.report()
+
     torch_dtype = {
         "fp32": torch.float32,
         "fp16": torch.float16,
@@ -174,6 +173,9 @@ def main(
         leave=False,
         disable=rank not in {0, "cuda:0", "cuda"},
     )
+    # logger.debug("====Post Init====")
+    # reporter.report(device=rank)
+    dist.barrier()
     if eval_first:
         run_eval(
             model=model.module,
@@ -196,8 +198,8 @@ def main(
         with ddp_context:
             with scaler_context:
                 loss, _, _ = model.module.step(micro_batch)
-                logger.debug("====Forward Pass====")
-                reporter.report()
+                # logger.debug("====Forward Pass====")
+                # reporter.report()
                 loss = loss / grad_accum_steps
             metrics.train_loss.update(loss.item())
             # Get the next batch straight away without blocking whilst we compute the backward pass,
