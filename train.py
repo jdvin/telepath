@@ -236,7 +236,6 @@ def main(
                 metrics=metrics,
                 device=rank,
             )
-
         metrics.log()
         if metrics.epoch_microstep.value == len(train_dataloader):
             if is_main_process and checkpoints:

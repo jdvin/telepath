@@ -1,28 +1,68 @@
-import requests
+import asyncio
+import aiohttp
+from pathlib import Path
+import sys
 
-# URL of the file you want to download
-file_url = "https://osf.io/b69u8/download"
+file_ids = [
+    # "b69u8",
+    # "yjcqp",
+    # "5evgd",
+    # "6b4tq",
+    # "vxrja",
+    # "bcsm8",
+    # "wftvu",
+    # "xr4f9",
+    "rh28b",
+    "wf2xp",
+]
+
+# URL template for downloads
+file_url = "https://osf.io/{file_id}/download"
 
 
-# Sending a GET request to the file URL with stream=True
-response = requests.get(file_url, stream=True)
+async def download_file(session, file_id):
+    """Download a single file asynchronously."""
+    url = file_url.format(file_id=file_id)
+    output_file = Path(f"downloaded_{file_id}.dat")
 
-# Check if the request was successful
-if response.status_code == 200:
-    # Get the total file size from the response headers
-    total_size = int(response.headers.get("content-length", 0))
-    chunk_size = 8192
-    downloaded_size = 0
+    try:
+        async with session.get(url) as response:
+            if response.status != 200:
+                print(f"Failed to download {file_id}. Status: {response.status}")
+                return False
 
-    # Specify the file name and path where you want to save the downloaded file
-    with open("downloaded_file.extension", "wb") as file:
-        # Download the file in chunks
-        for chunk in response.iter_content(chunk_size=chunk_size):
-            if chunk:  # filter out keep-alive new chunks
-                file.write(chunk)
-                downloaded_size += len(chunk)
-                progress = (downloaded_size / total_size) * 100
-                print(f"Download progress: {progress:.2f}%", end="\r")
-    print("\nFile downloaded successfully")
-else:
-    print(f"Failed to download file. Status code: {response.status_code}")
+            total_size = int(response.headers.get("content-length", 0))
+            downloaded_size = 0
+
+            with open(output_file, "wb") as f:
+                async for chunk in response.content.iter_chunked(8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded_size += len(chunk)
+                        progress = (
+                            (downloaded_size / total_size) * 100 if total_size else 0
+                        )
+                        print(f"{file_id}: {progress:.1f}%", end="\r", file=sys.stderr)
+
+            print(f"\n{file_id}: Download complete")
+            return True
+
+    except Exception as e:
+        print(f"\nError downloading {file_id}: {str(e)}")
+        return False
+
+
+async def download_all_files():
+    """Download all files concurrently."""
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=None)
+    ) as session:
+        tasks = [download_file(session, file_id) for file_id in file_ids]
+        results = await asyncio.gather(*tasks)
+
+        successful = sum(1 for r in results if r)
+        print(f"\nDownloaded {successful} out of {len(file_ids)} files successfully")
+
+
+if __name__ == "__main__":
+    asyncio.run(download_all_files())

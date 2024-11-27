@@ -4,6 +4,8 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 from typing import Any, Callable, Mapping
 
+from transformers.trainer_utils import is_main_process
+
 import pandas as pd
 import torch
 from torch import Tensor, tensor
@@ -177,7 +179,6 @@ def construct_table(
 
 @dataclass
 class Metric:
-
     """An object for the unified tracking and logging of information about a training run.
 
     Attributes:
@@ -233,7 +234,7 @@ class Metric:
             if isinstance(value, Tensor):
                 value = value.item()
             wandb.log(
-                {key: (plot.line(**value) if isinstance(value, dict) else value)},
+                {self.name: (plot.line(**value) if isinstance(value, dict) else value)},
                 commit=False,
             )
         if self.reset_rule == MetricResetRule.ON_LOG:
@@ -320,13 +321,11 @@ class MetricManager:
     def log(self):
         if not self.step.value % self.log_interval == 0:
             return
-
-        for key, metric in asdict(self).items():
+        for key, metric in self.__dict__.items():
             if not isinstance(metric, Metric):
                 continue
-
             if metric.log_every_step:
-                metric.log(key)
+                metric.log()
 
         if self.is_main_process:
             wandb.log({}, commit=True)

@@ -767,7 +767,12 @@ class TelepathTrainer(nn.Module):
         all_text_projs = torch.zeros(
             B * self.world_size, self.d_model, device=self.device, dtype=text_proj.dtype
         )
-        all_gather_into_tensor(all_text_projs, text_proj)
+
+        gathered_text_projs = [
+            torch.zeros_like(text_proj) for _ in range(self.world_size)
+        ]
+        torch.distributed.all_gather(gathered_text_projs, text_proj)
+        all_text_projs = torch.cat(gathered_text_projs, dim=0)
         # TODO: Almost certainly more efficient to just match the ids...
         labels = 2 * ((all_text_projs @ all_text_projs.T) > 0.99).int() - 1
         logits = torch.empty_like(labels, device=self.device)
@@ -782,7 +787,7 @@ class TelepathTrainer(nn.Module):
         return loss, logits, labels
 
     def sigmoid_loss(self, logits: Tensor, labels: Tensor) -> Tensor:
-        return -F.sigmoid(labels * (-self.t * logits + self.b)).mean()
+        return -torch.log(F.sigmoid(labels * (-self.t * logits + self.b))).mean()
 
 
 class TelepathGenerator(nn.Module):
