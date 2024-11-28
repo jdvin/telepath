@@ -165,7 +165,7 @@ def main(
     train_dataloader_iterator = get_dataloader_iterator(
         train_dataloader, train_sampler, metrics.epoch.value  # type: ignore
     )
-    micro_batch = get_microbatch(train_dataloader_iterator, rank)
+    micro_batch = get_microbatch(train_dataloader_iterator, rank, torch_dtype)
     logger.info("Beginning Training.")
     train_pbar = tqdm(
         total=steps_per_epoch,
@@ -183,6 +183,7 @@ def main(
             val_sampler=val_sampler,
             metrics=metrics,
             device=rank,
+            dtype=torch_dtype,
         )
     while True:
         is_accumulating = (
@@ -205,7 +206,9 @@ def main(
             # Get the next batch straight away without blocking whilst we compute the backward pass,
             # unless we are at the end of the epoch.
             if metrics.epoch_microstep.value < len(train_dataloader) - 1:
-                micro_batch = get_microbatch(train_dataloader_iterator, rank)
+                micro_batch = get_microbatch(
+                    train_dataloader_iterator, rank, torch_dtype
+                )
             scaler.scale(loss).backward(retain_graph=True)  # type: ignore
 
         # torch.cuda.memory._dump_snapshot("new_snapshot.pickle")
@@ -235,6 +238,7 @@ def main(
                 val_sampler=val_sampler,
                 metrics=metrics,
                 device=rank,
+                dtype=torch_dtype,
             )
         metrics.log()
         if metrics.epoch_microstep.value == len(train_dataloader):
@@ -254,7 +258,7 @@ def main(
                 train_dataloader, train_sampler, metrics.epoch.value
             )
             # Get the first microbatch of the new epoch.
-            micro_batch = get_microbatch(train_dataloader_iterator, rank)
+            micro_batch = get_microbatch(train_dataloader_iterator, rank, torch_dtype)
 
         if metrics.epoch.value == cfg.num_epochs + 1:
             logger.info("Training complete.")

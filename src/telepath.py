@@ -153,6 +153,7 @@ class TelepathConfig:
     text_encoder_n_layers: int = 0
     dropout: float = 0.1
     neural_encoder_scale_exponent: float = -0.25
+    neural_encoder_checkpoint_activations: bool = False
     train_text_encoder: bool = False
     cache_text_embeddings: bool = True
     things_concepts_path: str = "data/things_concepts.csv"
@@ -694,6 +695,7 @@ class TelepathTrainer(nn.Module):
             n_layers=config.neural_encoder_n_layers,
             dropout=config.dropout,
             scale_exponent=config.neural_encoder_scale_exponent,
+            checkpoint_activations=config.neural_encoder_checkpoint_activations,
         )
         self.neural_projection = nn.Linear(config.d_model, config.d_model)
         self.text_projection = nn.Linear(config.d_model, config.d_model)

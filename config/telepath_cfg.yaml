@@ -11,4 +11,4 @@ neural_encoder_n_layers: 24
 text_encoder_n_layers: 24
 dropout: 0.1
 cache_text_embeddings: True
-
+neural_encoder_checkpoint_activations: True

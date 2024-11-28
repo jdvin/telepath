@@ -72,11 +72,16 @@ def load_yaml(path: str) -> dict:
 def get_microbatch(
     dataloader_iterator: Iterator,
     device: str | int,
+    dtype: torch.dtype,
 ) -> dict[str, torch.Tensor]:
     micro_batch = next(dataloader_iterator)
     return {
         k: (
-            v.pin_memory().to(device=device, non_blocking=True)
+            v.pin_memory().to(
+                device=device,
+                dtype=dtype if v.dtype == torch.float32 else torch.long,
+                non_blocking=True,
+            )
             if isinstance(device, int)
             else v.to(device=device)
         )
@@ -232,6 +237,7 @@ def run_eval(
     val_sampler: Sampler | None,
     metrics: MetricManager,
     device: str | int,
+    dtype: torch.dtype,
 ):
     """Run evaluation on the validation sets."""
     model.eval()
@@ -246,7 +252,7 @@ def run_eval(
     )
     loss = torch.tensor([0])
     for _ in range(len(val_dataloader)):
-        micro_batch = get_microbatch(val_dataloader_iterator, device)
+        micro_batch = get_microbatch(val_dataloader_iterator, device, dtype)
         loss, logits, labels = model.step(micro_batch)
         loss += loss / len(val_dataloader)
 

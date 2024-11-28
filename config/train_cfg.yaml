@@ -3,10 +3,10 @@ dataset_path: data/
 subjects:
   - 1
 things_metadata_path: data/things_concepts.csv
-num_epochs: 10
-batch_size: 60
-train_micro_batch_size: 10
-val_micro_batch_size: 60
+num_epochs: 32
+batch_size: 144
+train_micro_batch_size: 24
+val_micro_batch_size: 64
 validation_interval: 1.0
 log_interval: 1
 max_lr: 0.00001

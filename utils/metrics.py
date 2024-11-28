@@ -158,7 +158,7 @@ def get_accuracy_generations(generations: list[dict[str, list[str]]]) -> float:
 
 def get_accuracy(out: Mapping[str, Tensor]) -> Tensor:
     logits, labels = out["logits"], out["labels"]
-    return (labels[range(labels.shape[0]), logits.argmax(dim=1)] == 1).mean()
+    return (labels[range(labels.shape[0]), logits.argmax(dim=1)] == 1).float().mean()
 
 
 def construct_table(
