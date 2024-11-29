@@ -700,7 +700,7 @@ class TelepathTrainer(nn.Module):
         self.neural_projection = nn.Linear(config.d_model, config.d_model)
         self.text_projection = nn.Linear(config.d_model, config.d_model)
         self.t_prime = nn.Parameter(torch.tensor(math.log(10)))
-        self.b = nn.Parameter(torch.tensor(-10.0))
+        self.b = nn.Parameter(torch.tensor(-5.0))
 
     @property
     def t(self):
@@ -789,7 +789,9 @@ class TelepathTrainer(nn.Module):
         return loss, logits, labels
 
     def sigmoid_loss(self, logits: Tensor, labels: Tensor) -> Tensor:
-        return -torch.log(F.sigmoid(labels * (-self.t * logits + self.b))).mean()
+        return (
+            -F.logsigmoid(labels * (self.t * (logits + self.b))).sum() / labels.shape[0]
+        )
 
 
 class TelepathGenerator(nn.Module):
