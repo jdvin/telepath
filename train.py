@@ -90,7 +90,8 @@ def main(
     }[cfg.dtype]
 
     model.to(rank, dtype=torch_dtype)
-    reporter = MemReporter(model)
+    log_model_details(model)
+    # reporter = MemReporter(model)
     if world_size > 1:
         model = DDP(model, device_ids=[rank])  # type: ignore
     logger.info(f"Loading dataset from {cfg.dataset_path}.")

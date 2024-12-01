@@ -16,7 +16,6 @@ from torch.distributed import (
     all_gather_into_tensor,
 )
 import wandb
-from transformers import WhisperTokenizer
 
 THINGS_CONCEPTS_PATH = "data/things_concepts.csv"
 SYNONYM_MAP = {
@@ -134,7 +133,7 @@ def flatten_ranks(root: list[dict[str, list[Any]]]) -> dict[str, list[Any]]:
 
 
 def get_accuracy_generations(generations: list[dict[str, list[str]]]) -> float:
-    """Slightly less naiive accuracy calculation."""
+    """Slightly less naiive accuracy calculation for generations."""
     accuracy = 0
 
     if isinstance(generations, list):
@@ -158,7 +157,13 @@ def get_accuracy_generations(generations: list[dict[str, list[str]]]) -> float:
 
 def get_accuracy(out: Mapping[str, Tensor]) -> Tensor:
     logits, labels = out["logits"], out["labels"]
-    return (labels[range(labels.shape[0]), logits.argmax(dim=1)] == 1).float().mean()
+    return torch.tensor(
+        [
+            (labels[range(labels.shape[0]), logits.argmax(dim=1)] == 1).float().sum(),
+            labels.shape[0],
+        ],
+        device=logits.device,
+    )
 
 
 def construct_table(
@@ -313,6 +318,8 @@ class MetricManager:
             f"val/accuracy@{batch_size}",
             tensor([0.0]),
             transform_fn=get_accuracy,
+            reduce_fn=all_reduce_sum,
+            compute_fn=divide,
             log_every_step=False,
             device=device,
             world_size=world_size,
