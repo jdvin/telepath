@@ -29,8 +29,12 @@ In short, my thought process is the following:
         - or could we just have multiple +1 items in the loss fn?
 - [x] new val metrics
     - accuracy @ n 
-- [ ] Make Training Work Again!
+- [x] Make Training Work Again!
+- [ ] Swap to sentence t5
 - [ ] Swap AdamW to SOAP
+- [ ] Add resting state data
+- [ ] More comprehensive test sweat
+- [ ] subject embeddings
 - [ ] add THINGS-EEG data (50ms)
     - add shift for forward so that epoch always begins at constant point
 

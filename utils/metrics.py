@@ -109,6 +109,10 @@ def all_gather_append(t: Tensor | list, ws: int) -> list:
     return out
 
 
+def distributed_identity(t: Tensor | list, ws: int) -> Tensor | list:
+    return t
+
+
 def row_concat(t1: MetricState, t2: MetricState) -> Tensor:
     assert isinstance(t1, Tensor) and isinstance(t2, Tensor)
     return torch.concat([t1, t2], dim=0)
@@ -155,7 +159,7 @@ def get_accuracy_generations(generations: list[dict[str, list[str]]]) -> float:
     return accuracy
 
 
-def get_accuracy(out: Mapping[str, Tensor]) -> Tensor:
+def get_accuracy_contrastive(out: Mapping[str, Tensor]) -> Tensor:
     logits, labels = out["logits"], out["labels"]
     return torch.tensor(
         [
@@ -317,8 +321,8 @@ class MetricManager:
         self.val_accuracy = Metric(
             f"val/accuracy@{batch_size}",
             tensor([0.0]),
-            transform_fn=get_accuracy,
-            reduce_fn=all_reduce_sum,
+            transform_fn=get_accuracy_contrastive,
+            reduce_fn=distributed_identity,  # All ranks should have the same values anyway.
             compute_fn=divide,
             log_every_step=False,
             device=device,
