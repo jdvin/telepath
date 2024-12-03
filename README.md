@@ -31,11 +31,13 @@ In short, my thought process is the following:
     - accuracy @ n 
 - [x] Make Training Work Again!
 - [ ] Swap to sentence t5
-- [ ] Swap AdamW to SOAP
+- [ ] Training state checkpointing and resumption
 - [ ] Add resting state data
-- [ ] More comprehensive test sweat
+- [ ] Swap AdamW to SOAP
+- [ ] More comprehensive test suite
 - [ ] subject embeddings
 - [ ] add THINGS-EEG data (50ms)
     - add shift for forward so that epoch always begins at constant point
-
+- [ ] Clean up some inefficiencies
+    - Actual batch passing, rather than just an all reduce
 - [ ] figure out what is going on with the generation tables?

@@ -35,3 +35,13 @@ class GEGLU(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         return self.gelu(self.W(x)) * self.V(x)
+
+
+class LinearReLU(nn.Module):
+    def __init__(self, d_in: int, d_out: int, bias: bool = False):
+        super().__init__()
+        self.W = nn.Linear(d_in, d_out, bias=bias)
+        self.relu = nn.ReLU()
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.relu(self.W(x))

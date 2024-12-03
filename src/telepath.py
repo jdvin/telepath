@@ -15,7 +15,7 @@ import yaml
 from src.components.norm import RMSNorm
 
 from .components.attention import MultiHeadAttention, RelativePositionMultiHeadAttention
-from .components.activations import GEGLU
+from .components.activations import GEGLU, LinearReLU
 
 from transformers import (
     AutoTokenizer,
@@ -256,6 +256,7 @@ class RelativePositionResidualAttentionBlock(ResidualAttentionBlock):
         cross_attn: bool = False,
         dropout: float = 0.1,
         scale_exponent: float = 0,
+        use_geglu: bool = False,
     ):
         super().__init__(
             source_seq_len=source_seq_len,
@@ -302,7 +303,11 @@ class RelativePositionResidualAttentionBlock(ResidualAttentionBlock):
             self.cross_attn_ln = RMSNorm(d_model)
 
         self.mlp = nn.Sequential(
-            GEGLU(d_model, d_mlp, bias=False),
+            (
+                GEGLU(d_model, d_mlp, bias=False)
+                if use_geglu
+                else LinearReLU(d_model, d_mlp, bias=False)
+            ),
             nn.Linear(d_mlp, d_model, bias=False),
         )
         self.mlp_ln = RMSNorm(d_model)
