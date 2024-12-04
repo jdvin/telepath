@@ -30,11 +30,11 @@ In short, my thought process is the following:
 - [x] new val metrics
     - accuracy @ n 
 - [x] Make Training Work Again!
-- [ ] Swap to sentence t5
+- [x] Swap to sentence t5
+- [ ] More comprehensive test suite
 - [ ] Training state checkpointing and resumption
 - [ ] Add resting state data
 - [ ] Swap AdamW to SOAP
-- [ ] More comprehensive test suite
 - [ ] subject embeddings
 - [ ] add THINGS-EEG data (50ms)
     - add shift for forward so that epoch always begins at constant point

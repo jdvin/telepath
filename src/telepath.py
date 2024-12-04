@@ -21,6 +21,7 @@ from transformers import (
     AutoTokenizer,
     T5ForConditionalGeneration,
 )
+from sentence_transformers import SentenceTransformer
 
 
 def configure_optimizers(
@@ -151,7 +152,9 @@ class TelepathConfig:
     n_heads: int = 0
     neural_encoder_n_layers: int = 0
     text_encoder_n_layers: int = 0
+    text_encoder_use_geglu: bool = False
     dropout: float = 0.1
+    shared_emb_dim: int = 0
     neural_encoder_scale_exponent: float = -0.25
     neural_encoder_checkpoint_activations: bool = False
     train_text_encoder: bool = False
@@ -256,7 +259,7 @@ class RelativePositionResidualAttentionBlock(ResidualAttentionBlock):
         cross_attn: bool = False,
         dropout: float = 0.1,
         scale_exponent: float = 0,
-        use_geglu: bool = False,
+        use_geglu: bool = True,
     ):
         super().__init__(
             source_seq_len=source_seq_len,
@@ -400,6 +403,7 @@ class RelativePositionTransformer(nn.Module):
         n_layer: int,
         cross_attn: bool,
         is_causal: bool,
+        use_geglu: bool = True,
         checkpoint_activations: bool = False,
         scale_exponent: float = 0,
         dropout: float = 0.1,
@@ -417,6 +421,7 @@ class RelativePositionTransformer(nn.Module):
                 scale_exponent=scale_exponent,
                 is_causal=is_causal,
                 dropout=dropout,
+                use_geglu=use_geglu,
             )
             for _ in range(n_layer)
         )
@@ -451,11 +456,13 @@ class RelativePositionTransformer(nn.Module):
         return logits
 
     @classmethod
-    def from_pretrained(cls, config: TelepathConfig, cross_attn: bool, is_causal: bool):
-        d_pt = T5ForConditionalGeneration.from_pretrained(
-            config.text_encoder_pretrained_model
-        )
-        assert isinstance(d_pt, T5ForConditionalGeneration), type(d_pt)
+    def from_pretrained(
+        cls,
+        source_model: nn.Module,
+        config: TelepathConfig,
+        cross_attn: bool,
+        is_causal: bool,
+    ):
 
         d_n = cls(
             n_vocab=config.text_encoder_vocab_size,
@@ -468,16 +475,13 @@ class RelativePositionTransformer(nn.Module):
             dropout=config.dropout,
             cross_attn=cross_attn,
             is_causal=is_causal,
+            use_geglu=config.text_encoder_use_geglu,
         )
 
         new_keys = list(d_n.state_dict().keys())
         nw_sd = d_n.state_dict()
         param_map = T5_ENCODER_PARAM_MAP if not cross_attn else T5_DECODER_PARAM_MAP
-        for key, param in (
-            getattr(d_pt, "get_encoder" if not cross_attn else "get_decoder")()
-            .state_dict()
-            .items()
-        ):
+        for key, param in source_model.state_dict().items():
             param: Tensor
             new_key = param_map.map_param(key)
             assert new_key in new_keys, f"{new_key} not in {new_keys}."
@@ -537,8 +541,12 @@ class TextEncoder(RelativePositionTransformer):
         )
 
     @classmethod
-    def from_pretrained(cls, config: TelepathConfig, *args, **kwargs):
-        return super().from_pretrained(config, cross_attn=False, is_causal=False)
+    def from_pretrained(
+        cls, source_model: nn.Module, config: TelepathConfig, *args, **kwargs
+    ):
+        return super().from_pretrained(
+            source_model, config, cross_attn=False, is_causal=False
+        )
 
     @property
     def device(self):
@@ -647,8 +655,12 @@ class TextDecoder(RelativePositionTransformer):
         return generations
 
     @classmethod
-    def from_pretrained(cls, config: TelepathConfig, *args, **kwargs):
-        return super().from_pretrained(config, cross_attn=True, is_causal=True)
+    def from_pretrained(
+        cls, source_model: nn.Module, config: TelepathConfig, *args, **kwargs
+    ):
+        return super().from_pretrained(
+            source_model, config, cross_attn=True, is_causal=True
+        )
 
     @property
     def device(self):
@@ -685,7 +697,12 @@ class TelepathTrainer(nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.config.text_encoder_pretrained_model
         )
-        self.text_encoder = TextEncoder.from_pretrained(config)
+        text_encoder_source_model = SentenceTransformer(
+            config.text_encoder_pretrained_model
+        )
+        self.text_encoder = TextEncoder.from_pretrained(
+            text_encoder_source_model[0].auto_model, config
+        )
         self.cache_text_embeddings = config.cache_text_embeddings
         if config.cache_text_embeddings:
             self.text_encoder.to(rank)
@@ -702,8 +719,10 @@ class TelepathTrainer(nn.Module):
             scale_exponent=config.neural_encoder_scale_exponent,
             checkpoint_activations=config.neural_encoder_checkpoint_activations,
         )
-        self.neural_projection = nn.Linear(config.d_model, config.d_model)
-        self.text_projection = nn.Linear(config.d_model, config.d_model)
+        self.neural_projection = nn.Linear(config.d_model, config.shared_emb_dim)
+        self.text_projection = nn.Linear(config.d_model, config.shared_emb_dim)
+        self.text_projection.load_state_dict(text_encoder_source_model[2].state_dict())
+        self.text_projection.weight.requires_grad = False
         self.t_prime = nn.Parameter(torch.tensor(math.log(10)))
         self.b = nn.Parameter(torch.tensor(-5.0))
 
