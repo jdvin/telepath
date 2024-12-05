@@ -9,12 +9,14 @@ from transformers import (
     T5Config,
     WhisperModel,
 )
+import pytest
 import torch
 from torch import nn
 from torch.nn import functional as F
-
+import torch.distributed as dist
+import torch.multiprocessing as mp
 from src.components.activations import GEGLU
-from src.telepath import TelepathConfig, TelepathGenerator, TextDecoder, TextEncoder
+from src.telepath import TelepathConfig, TelepathTrainer, TextDecoder, TextEncoder
 from utils.metrics import position_in_cycle
 
 torch.set_grad_enabled(False)
@@ -35,19 +37,27 @@ REF_TEXT_MODEL = "google/t5-v1_1-base"
 ref_config = T5Config.from_pretrained(REF_TEXT_MODEL)
 config = TelepathConfig(
     n_eeg_channels=63,
-    text_encoder_pretrained_model=REF_TEXT_MODEL,
-    text_encoder_vocab_size=ref_config.vocab_size,
+    text_encoder_pretrained_model="sentence-transformers/sentence-t5-large",
+    neural_encoder_block_size=400,
     text_encoder_block_size=10,
-    d_model=ref_config.d_model,
-    text_encoder_d_mlp=ref_config.d_ff,
-    n_heads=ref_config.num_heads,
-    text_encoder_n_layers=ref_config.num_layers,
+    d_model=1024,
+    shared_emb_dim=768,
+    neural_encoder_d_mlp=3072,
+    text_encoder_d_mlp=2816,
+    text_encoder_vocab_size=32128,
+    n_heads=16,
+    neural_encoder_n_layers=24,
+    text_encoder_n_layers=24,
+    cache_text_embeddings=True,
+    neural_encoder_checkpoint_activations=True,
     dropout=0.0,
 )
 ref_config.dropout_rate = 0.0
 ref_text_model = T5ForConditionalGeneration.from_pretrained(
-    config.text_encoder_pretrained_model, config=ref_config
+    REF_TEXT_MODEL, config=ref_config
 )
+ref_encoder = ref_text_model.get_encoder()
+ref_decoder = ref_text_model.get_decoder()
 
 identity = lambda x: x
 element_0 = lambda x: x[0]
@@ -190,8 +200,8 @@ def check_relative_position_bias(model, ref_model, is_causal):
 def test_text_encoder():
     global activations
     global ref_activations
-    ref_encoder = ref_text_model.get_encoder()
-    encoder = TextEncoder.from_pretrained(config)
+    global ref_encoder
+    encoder = TextEncoder.from_pretrained(ref_encoder, config)
     check_relative_position_bias(encoder, ref_encoder, False)
     inputs = torch.tensor([[0, 1], [0, 1], [0, 1]])
     # encoder.blocks[0].register_forward_pre_hook(debug_hook)
@@ -230,8 +240,8 @@ def test_text_encoder():
 def test_text_decoder():
     global activations
     global ref_activations
-    ref_decoder = ref_text_model.get_decoder()
-    decoder = TextDecoder.from_pretrained(config)
+    global ref_decoder
+    decoder = TextDecoder.from_pretrained(ref_decoder, config)
     inputs = torch.tensor([[0, 1], [0, 1], [0, 1]])
     activations = decoder(inputs, True, activations)
     ref_activations = ref_decoder(
@@ -246,8 +256,9 @@ iteration = 0
 
 def test_generation():
     global iteration
+    global ref_decoder
     # TODO: Modify this to test for the continuous alignment of the embedding and the output tokens.
-    decoder = TextDecoder.from_pretrained(config)
+    decoder = TextDecoder.from_pretrained(ref_decoder, config)
 
     stop_token_id = 999
     max_length = 10
@@ -293,3 +304,69 @@ def test_generation():
             [0, 2, 2, stop_token_id],
             [0, 3, 3, 3, stop_token_id],
         ]
+
+
+def setup_distributed(rank, world_size):
+    """Initialize distributed environment"""
+    dist.init_process_group(
+        backend="nccl" if torch.cuda.is_available() else "gloo",
+        init_method="tcp://localhost:8889",
+        world_size=world_size,
+        rank=rank,
+    )
+
+
+def run_distributed_test(rank, world_size, test_fn, *args):
+    """Wrapper to run a test in a distributed setting"""
+    setup_distributed(rank, world_size)
+    test_fn(rank, world_size, *args)
+    dist.destroy_process_group()
+
+
+def test_distributed(test_fn, world_size=2):
+    """Decorator to run a test across multiple processes"""
+    mp.spawn(
+        run_distributed_test, args=(world_size, test_fn), nprocs=world_size, join=True
+    )
+
+
+def test_sigmoid_loss():
+    """Test sigmoid loss computation in isolation"""
+    model = TelepathTrainer(config, 0, 1)
+    logits = torch.randn(2, 2)
+    labels = 2 * (torch.rand(2, 2) > 0.5).float() - 1
+
+    loss = model.sigmoid_loss(logits, labels)
+    assert not torch.isnan(loss)
+    assert loss.requires_grad
+
+
+def _test_step_basic(rank, world_size):
+    """Actual distributed test of the step method"""
+    model = TelepathTrainer(config, rank, world_size)
+
+    # Create same input on all ranks.
+    torch.manual_seed(42)
+    batch = {
+        "input_features": torch.randn(2, 32, 10),
+        "input_ids": torch.randint(1, 100, (2, 10)),
+        "object_ids": torch.randint(1, 100, (2,)),
+    }
+
+    loss, all_logits, labels = model.step(batch)
+
+    # Verify all ranks got the same loss.
+    gathered_losses = [torch.zeros_like(loss) for _ in range(world_size)]
+    dist.all_gather(gathered_losses, loss)
+
+    if rank == 0:
+        assert all(torch.allclose(loss, other_loss) for other_loss in gathered_losses)
+
+
+def test_step_distributed():
+    """Entry point for distributed test"""
+    test_distributed(_test_step_basic, world_size=2)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])
