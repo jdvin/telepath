@@ -1,6 +1,7 @@
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, asdict
+from functools import partial
 from enum import Enum
 from typing import Any, Callable, Mapping
 
@@ -170,6 +171,20 @@ def get_accuracy_contrastive(out: Mapping[str, Tensor]) -> Tensor:
     )
 
 
+def get_average_logits_for_label(out: dict[str, Tensor], label: int) -> Tensor:
+    logits, labels = out["logits"], out["labels"]
+    mask = labels == label
+    target_logits = logits[mask]
+    return torch.tensor(
+        [target_logits.sum(), mask.sum()],
+        device=logits.device,
+    )
+
+
+get_average_positive_logits = partial(get_average_logits_for_label, label=1)
+get_average_negative_logits = partial(get_average_logits_for_label, label=-1)
+
+
 def construct_table(
     generations: dict[str, list[str]] | list[dict[str, list[str]]]
 ) -> dict:
@@ -279,7 +294,7 @@ class MetricManager:
             world_size=world_size,
         )
         self.epoch_microstep = Metric(
-            "train/epoch microstep",
+            "train/epoch_microstep",
             1,
             transform_fn=position_in_cycle,
             accum_fn=replace,
@@ -288,7 +303,7 @@ class MetricManager:
             world_size=world_size,
         )
         self.epoch_step = Metric(
-            "train/epoch step",
+            "train/epoch_step",
             1,
             transform_fn=position_in_cycle,
             accum_fn=replace,
@@ -311,6 +326,18 @@ class MetricManager:
             device=device,
             world_size=world_size,
         )
+        self.temperature = Metric(
+            "train/temperature",
+            0,
+            device=device,
+            world_size=world_size,
+        )
+        self.bias = Metric(
+            "train/bias",
+            0,
+            device=device,
+            world_size=world_size,
+        )
         self.val_loss = Metric(
             "val/loss",
             tensor([0.0]),
@@ -324,6 +351,26 @@ class MetricManager:
             transform_fn=get_accuracy_contrastive,
             reduce_fn=distributed_identity,  # All ranks should have the same values anyway.
             compute_fn=divide,
+            log_every_step=False,
+            device=device,
+            world_size=world_size,
+        )
+        self.val_positive_logits = Metric(
+            "val/positive_logits_mean",
+            tensor(0.0),
+            transform_fn=get_average_positive_logits,
+            compute_fn=divide,
+            reduce_fn=distributed_identity,  # All ranks should have the same values anyway.
+            log_every_step=False,
+            device=device,
+            world_size=world_size,
+        )
+        self.val_negative_logits = Metric(
+            "val/negative_logits_mean",
+            tensor(0.0),
+            transform_fn=get_average_negative_logits,
+            compute_fn=divide,
+            reduce_fn=distributed_identity,  # All ranks should have the same values anyway.
             log_every_step=False,
             device=device,
             world_size=world_size,

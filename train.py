@@ -266,7 +266,8 @@ def main(
             break
         metrics.step.update(1)
         metrics.microstep.update(1)
-
+        metrics.temperature.update(model.module.t.item())
+        metrics.bias.update(model.module.b.item())
         metrics.epoch_step.update((metrics.step.value, steps_per_epoch))
         metrics.epoch_microstep.update((metrics.microstep.value, len(train_dataloader)))
         metrics.lr.update(lr_scheduler.get_last_lr()[0])

@@ -257,8 +257,13 @@ def run_eval(
         loss += loss / len(val_dataloader)
 
         val_pbar.update()
-        metrics.val_accuracy.update({"logits": logits, "labels": labels})
+        out = {"logits": logits, "labels": labels}
+        metrics.val_accuracy.update(out)
+        metrics.val_positive_logits.update(out)
+        metrics.val_negative_logits.update(out)
     metrics.val_accuracy.log()
+    metrics.val_positive_logits.log()
+    metrics.val_negative_logits.log()
 
     metrics.val_loss.update(loss)
     metrics.val_loss.log()
