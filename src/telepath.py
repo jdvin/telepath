@@ -785,6 +785,11 @@ class TelepathTrainer(nn.Module):
         del self.text_encoder
         torch.cuda.empty_cache()
 
+    def bias(self, labels: Tensor) -> Tensor:
+        B = labels.shape[0]
+        num_positive = (labels[labels == 1].sum() - B) / 2
+        return self.b * (1 + num_positive / B)
+
     def step(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor, Tensor]:
         (
             eeg,
@@ -837,7 +842,8 @@ class TelepathTrainer(nn.Module):
 
     def sigmoid_loss(self, logits: Tensor, labels: Tensor) -> Tensor:
         return (
-            -F.logsigmoid(labels * (self.t * (logits + self.b))).sum() / labels.shape[0]
+            -F.logsigmoid(labels * (self.t * (logits + self.bias))).sum()
+            / labels.shape[0]
         )
 
 
