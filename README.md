@@ -31,11 +31,11 @@ In short, my thought process is the following:
     - accuracy @ n 
 - [x] Make Training Work Again!
 - [x] Swap to sentence t5
+- [x] subject embeddings
 - [ ] More comprehensive test suite
 - [ ] Training state checkpointing and resumption
 - [ ] Add resting state data
 - [ ] Swap AdamW to SOAP
-- [ ] subject embeddings
 - [ ] add THINGS-EEG data (50ms)
     - add shift for forward so that epoch always begins at constant point
 - [ ] Clean up some inefficiencies

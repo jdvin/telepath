@@ -16,6 +16,7 @@ from src.components.norm import RMSNorm
 
 from .components.attention import MultiHeadAttention, RelativePositionMultiHeadAttention
 from .components.activations import GEGLU, LinearReLU
+from .components.embed import Embedding3D
 
 from transformers import (
     AutoTokenizer,
@@ -142,6 +143,8 @@ T5_DECODER_PARAM_MAP = ParamMap(
 @dataclass
 class TelepathConfig:
     n_eeg_channels: int
+    n_subjects: int
+    n_embedding_tokens: int
     text_encoder_pretrained_model: str | None
     text_encoder_stop_token: int = 0
     text_encoder_vocab_size: int = 0
@@ -331,17 +334,20 @@ class NeuralEncoder(nn.Module):
         dropout: float,
         n_layers: int,
         scale_exponent: float,
+        n_subjects: int,
+        n_embedding_tokens: int,
         checkpoint_activations: bool = False,
     ):
         super().__init__()
         self.embed_positions = nn.Embedding(block_size, d_model)
         self.embed_positions.weight = nn.Parameter(sinusoids(block_size, d_model))
+        self.embed_subjects = Embedding3D(n_subjects, n_embedding_tokens, d_model)
         self.sample_proj = nn.Linear(n_input_channels, d_model)
-
+        total_block_size = block_size + n_embedding_tokens
         self.blocks = nn.ModuleList(
             ResidualAttentionBlock(
-                block_size,
-                block_size,
+                total_block_size,
+                total_block_size,
                 d_model,
                 n_heads,
                 d_mlp=d_mlp,
@@ -355,12 +361,14 @@ class NeuralEncoder(nn.Module):
         self.d_model = d_model
         self.checkpoint_activations = checkpoint_activations
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, subject_ids: Tensor) -> Tensor:
         # (batch_size, n_eeg_channels, sequence_length)
         B, N_C, T = x.size()
+        sub_emb = self.embed_subjects(subject_ids)
         x = (x - x[:, :, T // 2].unsqueeze(-1)).transpose(-1, -2)
         x = self.sample_proj(x)
         x = (x + self.embed_positions.weight[None, :, :]).to(x.dtype)
+        x = torch.concat([sub_emb, x], dim=1)
         if self.checkpoint_activations:
             x = checkpoint_sequential(
                 self.blocks, len(self.blocks), x, use_reentrant=False
@@ -677,7 +685,7 @@ class TextDecoder(RelativePositionTransformer):
         return next(self.parameters()).device
 
 
-def masked_mean_reduce(t: Tensor, mask: Tensor) -> Tensor:
+def masked_mean_reduce(t: Tensor, mask: Tensor | None = None) -> Tensor:
     """Compute masked mean reduction along dim 1.
 
     Args:
@@ -686,9 +694,13 @@ def masked_mean_reduce(t: Tensor, mask: Tensor) -> Tensor:
     Returns:
         Tensor of shape [B, D] containing masked means
     """
-    mask = mask.to(device=t.device, dtype=t.dtype)
-    # Expand mask to match tensor dimensions
-    expanded_mask = mask.unsqueeze(-1).expand_as(t)
+    if mask is None:
+        mask = torch.ones(t.shape[0], t.shape[1], device=t.device, dtype=torch.bool)
+        expanded_mask = torch.ones_like(t)
+    else:
+        mask = mask.to(device=t.device, dtype=t.dtype)
+        # Expand mask to match tensor dimensions
+        expanded_mask = mask.unsqueeze(-1).expand_as(t)
 
     # Apply mask and compute mean
     masked_tensor = t * expanded_mask
@@ -723,6 +735,8 @@ class TelepathTrainer(nn.Module):
 
         self.neural_encoder = NeuralEncoder(
             n_input_channels=config.n_eeg_channels,
+            n_subjects=config.n_subjects,
+            n_embedding_tokens=config.n_embedding_tokens,
             block_size=config.neural_encoder_block_size,
             d_model=config.d_model,
             d_mlp=config.neural_encoder_d_mlp,
@@ -787,23 +801,24 @@ class TelepathTrainer(nn.Module):
 
     def bias(self, labels: Tensor) -> Tensor:
         B = labels.shape[0]
-        num_positive = (labels[labels == 1].sum() - B) / 2
-        return self.b * (1 + num_positive / B)
+        num_duplicates = ((labels == 1).sum(dim=1) > 1).sum()
+        return self.b - (self.b * (num_duplicates / B))
 
     def step(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor, Tensor]:
         (
             eeg,
             token_ids,
             object_ids,
+            subject_ids,
         ) = (
             batch["input_features"],
             batch["input_ids"],
             batch["object_ids"],
+            batch["subject_ids"],
         )
         B, N_C, T = eeg.shape
         eeg_enc = masked_mean_reduce(
-            self.neural_encoder(eeg),
-            torch.ones(B, T),
+            self.neural_encoder(eeg, subject_ids),
         )
         eeg_proj = self.neural_projection(eeg_enc)
         eeg_proj = F.normalize(eeg_proj, dim=-1)
@@ -842,7 +857,7 @@ class TelepathTrainer(nn.Module):
 
     def sigmoid_loss(self, logits: Tensor, labels: Tensor) -> Tensor:
         return (
-            -F.logsigmoid(labels * (self.t * (logits + self.bias))).sum()
+            -F.logsigmoid(labels * (self.t * (logits + self.bias(labels)))).sum()
             / labels.shape[0]
         )
 

@@ -117,7 +117,9 @@ def extract_things_100ms_ds(
     Side Note: I have no idea why the dude set the dataset up like this, would it not have made so much more sense to just
     use the common indexing scheme of THINGS between the training and test sets to begin with?
     """
-    ds_str = "".join([str(sub) for sub in subjects]) + str(epoch_start) + str(epoch_end)
+    ds_str = (
+        "-".join([str(sub) for sub in subjects]) + str(epoch_start) + str(epoch_end)
+    )
     if is_test_run:
         sessions_per_subject = 1
         session_epochs = {"train": 120, "test": 120}
@@ -151,7 +153,8 @@ def extract_things_100ms_ds(
     def split_shape(epochs_per_session: int) -> tuple[int, int, int]:
         return (
             len(subjects) * sessions_per_subject * epochs_per_session,
-            len(ELECTRODE_ORDER) + 1,  # +1 for the stimulus channel.
+            len(ELECTRODE_ORDER)
+            + 2,  # +2 for the stimulus channel and subject channel.
             epoch_end - epoch_start,
         )
 
@@ -233,11 +236,14 @@ def extract_things_100ms_ds(
                     )
                     # Slice the current epoch out of the data stream.
                     # rows x ch x time <- ch x time.
-                    ds[split_type][n, :, :] = data[
+                    ds[split_type][n, 1:, :] = data[
                         :, epoch_loc + epoch_start : epoch_loc + epoch_end
                     ]
-                    # Label the stimulus channel at the start of the epoch.
+                    # Label the stimulus channel and subject at the start of the epoch.
                     ds[split_type][n, 0, :] = np.full(
+                        shape=epoch_length, fill_value=sub_i
+                    )
+                    ds[split_type][n, 1, :] = np.full(
                         shape=epoch_length,
                         fill_value=target_obj,
                     )
@@ -283,17 +289,19 @@ def get_collate_fn(
         batch_size = len(samples)
         object_words = []
         object_ids = []
+        subject_ids = []
         eeg_features = []
         for sample in samples:
-            object_id = sample[0][0]
+            subject_ids.append(sample[0][0])
+            object_id = sample[1][0]
             object_ids.append(object_id)
             object_words.append(things_concepts["Word"][object_id])
             # If `get_spectrogram, sample is of shape (N_C, NF, T).
             # else, sampel is of shape (N_C, T)
             eeg_features.append(
-                get_spectrogram(torch.tensor(sample[1:, :]), n_fft, fft_hop_length)
+                get_spectrogram(torch.tensor(sample[2:, :]), n_fft, fft_hop_length)
                 if get_spectrogram
-                else torch.tensor(sample[1:, :])
+                else torch.tensor(sample[2:, :])
             )
         # We are doing all of the special tokens manually because (1) We do not trust HF, and (2) we have more control.
         # Here we add the stop token manually because it will then be included in the _attended to_ region of the attenton mask.
@@ -324,6 +332,7 @@ def get_collate_fn(
         return {
             "input_features": torch.stack(eeg_features),
             "object_ids": torch.tensor(object_ids).to(torch.long),
+            "subject_ids": torch.tensor(subject_ids).to(torch.long),
             "input_ids": input_ids,
             "decoder_attention_mask": attention_mask,
         }
