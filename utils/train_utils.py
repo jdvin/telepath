@@ -4,6 +4,7 @@ import math
 from typing import Any, Callable, Iterator
 import os
 import random
+from datetime import timedelta
 
 from loguru import logger
 import torch
@@ -128,7 +129,12 @@ def setup(
         os.environ["MASTER_ADDR"] = "localhost"
         os.environ["MASTER_PORT"] = "12355"
 
-        torch.distributed.init_process_group("nccl", rank=rank, world_size=world_size)
+        torch.distributed.init_process_group(
+            "nccl",
+            rank=rank,
+            world_size=world_size,
+            timeout=timedelta(minutes=30),
+        )
 
 
 def cleanup(world_size: int):

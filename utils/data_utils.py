@@ -190,7 +190,7 @@ def extract_things_100ms_ds(
             for split_type in split_types:
                 path = os.path.join(
                     root_dir,
-                    f"sub-{'0' if sub < 9 else ''}{sub}",
+                    f"sub-{'0' if sub <= 9 else ''}{sub}",
                     f"ses-0{ses}",
                     f"raw_eeg_{split_type}.npy",
                 )
@@ -239,6 +239,7 @@ def extract_things_100ms_ds(
                     ds[split_type][n, 1:, :] = data[
                         :, epoch_loc + epoch_start : epoch_loc + epoch_end
                     ]
+                    assert ds[split_type][n, 1:, :].sum() > 0
                     # Label the stimulus channel and subject at the start of the epoch.
                     ds[split_type][n, 0, :] = np.full(
                         shape=epoch_length, fill_value=sub_i

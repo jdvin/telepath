@@ -873,6 +873,8 @@ class TelepathGenerator(nn.Module):
             d_model=config.d_model,
             d_mlp=config.neural_encoder_d_mlp,
             n_heads=config.n_heads,
+            n_subjects=config.n_subjects,
+            n_embedding_tokens=config.n_embedding_tokens,
             n_layers=config.neural_encoder_n_layers,
             dropout=config.dropout,
             scale_exponent=config.neural_encoder_scale_exponent,
