@@ -23,6 +23,7 @@ from transformers import (
     T5ForConditionalGeneration,
 )
 from sentence_transformers import SentenceTransformer
+from distributed_shampoo import AdamGraftingConfig, DistributedShampoo
 
 
 def configure_optimizers(
@@ -31,12 +32,29 @@ def configure_optimizers(
     max_lr: float,
     weight_decay: float,
     warmup_frac: float,
+    use_shampoo: bool = False,
 ):
-    optimizer = AdamW(
-        [p for p in parameters() if p.requires_grad],
-        lr=max_lr,
-        weight_decay=weight_decay,
-    )
+    if use_shampoo:
+        optimizer = DistributedShampoo(
+            parameters(),
+            lr=max_lr,
+            betas=(0.9, 0.999),
+            epsilon=1e-12,
+            weight_decay=weight_decay,
+            max_preconditioner_dim=8192,
+            precondition_frequency=100,
+            use_decoupled_weight_decay=True,
+            grafting_config=AdamGraftingConfig(
+                beta2=0.999,
+                epsilon=1e-08,
+            ),
+        )
+    else:
+        optimizer = AdamW(
+            [p for p in parameters() if p.requires_grad],
+            lr=max_lr,
+            weight_decay=weight_decay,
+        )
     warmup_batches = int(num_batches * warmup_frac)
     warmup_scheduler = LinearLR(
         optimizer, start_factor=1e-7, end_factor=1, total_iters=warmup_batches

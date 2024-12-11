@@ -1,5 +1,5 @@
 n_eeg_channels: 63
-n_subjects: 1
+n_subjects: 10
 n_embedding_tokens: 32
 text_encoder_pretrained_model: google/t5-v1_1-large
 neural_encoder_block_size: 400
